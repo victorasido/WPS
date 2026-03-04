@@ -1,0 +1,5 @@
+pymupdf>=1.24.5
+python-docx==1.1.0
+cairosvg==2.7.1
+Pillow>=10.4.0
+docx2pdf>=0.1.8
