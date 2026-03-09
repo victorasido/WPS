@@ -41,6 +41,16 @@ THEMES = {
 
 FONT = "Segoe UI"
 
+# ─── Sizing constants ───────────────────────────────────────
+APP_W           = 520
+APP_H           = 400
+SETTINGS_W      = 400
+SETTINGS_H      = 260
+ZONE_W          = 500
+ZONE_MIN_H      = 320
+ZONE_MAX_H      = 620
+ZONE_PER_ITEM_H = 82
+
 
 # ─── FileCard widget ─────────────────────────────────────────
 class FileCard(tk.Frame):
@@ -48,6 +58,7 @@ class FileCard(tk.Frame):
         self._app = app
         self._multi = multi
         self._label_text = label
+        self._accepted_ext = accepted_ext
         self.file_paths = []
         t = app.t if app else THEMES["light"]
         super().__init__(master, bg=t["surface"],
@@ -57,10 +68,10 @@ class FileCard(tk.Frame):
 
     def _build(self, label, t):
         tk.Label(self, text=label.upper(), bg=t["surface"], fg=t["subtext"],
-                 font=(FONT, 8, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
+                 font=(FONT, 8, "bold")).pack(anchor="w", padx=16, pady=(12, 2))
 
         row = tk.Frame(self, bg=t["surface"])
-        row.pack(fill="x", padx=14, pady=(0, 12))
+        row.pack(fill="x", padx=16, pady=(0, 12))
         self._row = row
 
         self.name_label = tk.Label(row, text="Belum ada file dipilih",
@@ -72,13 +83,13 @@ class FileCard(tk.Frame):
                              bg=t["btn_bg"], fg=t["accent"],
                              font=(FONT, 9), relief="flat",
                              highlightbackground=t["border"], highlightthickness=1,
-                             padx=12, pady=4, cursor="hand2",
+                             padx=14, pady=5, cursor="hand2",
                              command=self._pick)
-        self.btn.pack(side="right", padx=(8, 0))
+        self.btn.pack(side="right", padx=(10, 0))
 
     def _pick(self):
         t = self._app.t if self._app else THEMES["light"]
-        ext_str = " ".join([f"*.{e}" for e in self.accepted_ext])
+        ext_str = " ".join([f"*.{e}" for e in self._accepted_ext])
         if self._multi:
             paths = filedialog.askopenfilenames(
                 filetypes=[("File", ext_str), ("All files", "*.*")]
@@ -99,15 +110,6 @@ class FileCard(tk.Frame):
                 self.name_label.config(text=os.path.basename(path), fg=t["text"])
                 self.btn.config(text="Ganti file")
                 self.config(highlightbackground=t["accent"])
-
-    @property
-    def accepted_ext(self):
-        # accessed by _build which is called before subclass sets it
-        return getattr(self, "_accepted_ext", [])
-
-    @accepted_ext.setter
-    def accepted_ext(self, value):
-        self._accepted_ext = value
 
     def set_path(self, path: str):
         t = self._app.t if self._app else THEMES["light"]
@@ -140,18 +142,6 @@ class FileCard(tk.Frame):
                                  highlightbackground=t["border"])
 
 
-# override accepted_ext before build runs — patch in __init__
-_orig_fc_init = FileCard.__init__
-
-
-def _patched_fc_init(self, master, label, accepted_ext, multi=False, app=None, **kwargs):
-    self._accepted_ext = accepted_ext
-    _orig_fc_init(self, master, label, accepted_ext, multi=multi, app=app, **kwargs)
-
-
-FileCard.__init__ = _patched_fc_init
-
-
 # ─── Zone Preview Dialog ──────────────────────────────────────
 class ZonePreviewDialog(tk.Toplevel):
     def __init__(self, master, zones, theme):
@@ -159,22 +149,48 @@ class ZonePreviewDialog(tk.Toplevel):
         self.title("Zona Tanda Tangan")
         self.resizable(False, False)
         self.grab_set()
+        self.lift()
+        self.focus_force()
         t = theme
         self.configure(bg=t["bg"])
         self.result = None
         self._vars = []
+        h = max(ZONE_MIN_H, min(160 + len(zones) * ZONE_PER_ITEM_H, ZONE_MAX_H))
         self._build(zones, t)
-        h = min(120 + len(zones) * 80 + 70, 600)
-        self._center(master, 460, h)
+        self._center(master, ZONE_W, h)
 
     def _build(self, zones, t):
+        # ── Header ──────────────────────────────────────────
         tk.Label(self, text=f"Ditemukan {len(zones)} zona — pilih yang akan di TTD:",
                  bg=t["bg"], fg=t["text"],
-                 font=(FONT, 10, "bold")).pack(anchor="w", padx=20, pady=(16, 8))
+                 font=(FONT, 10, "bold")).pack(anchor="w", padx=22, pady=(18, 10))
 
-        # Scrollable list
+        # ── Footer dulu (side=bottom) agar selalu tampil ─────
+        tk.Frame(self, bg=t["border"], height=1).pack(side="bottom", fill="x")
+
+        footer = tk.Frame(self, bg=t["bg"])
+        footer.pack(side="bottom", fill="x", padx=22, pady=14)
+
+        tk.Button(footer, text="Batalkan",
+                  bg=t["surface"], fg=t["text"],
+                  font=(FONT, 9), relief="flat",
+                  padx=16, pady=7, cursor="hand2",
+                  highlightbackground=t["border"], highlightthickness=1,
+                  command=self._cancel).pack(side="right", padx=(8, 0))
+
+        self.ok_btn = tk.Button(
+            footer,
+            text=f"Proses  ({len(zones)} zona dipilih)",
+            bg=t["accent"], fg="white",
+            font=(FONT, 9, "bold"), relief="flat",
+            padx=16, pady=7, cursor="hand2",
+            activebackground=t["accent_h"], activeforeground="white",
+            command=self._ok)
+        self.ok_btn.pack(side="right")
+
+        # ── Scrollable list (fill sisa ruang) ────────────────
         container = tk.Frame(self, bg=t["bg"])
-        container.pack(fill="both", expand=True, padx=20)
+        container.pack(side="top", fill="both", expand=True, padx=22, pady=(0, 4))
 
         canvas = tk.Canvas(container, bg=t["bg"], highlightthickness=0)
         scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
@@ -186,56 +202,45 @@ class ZonePreviewDialog(tk.Toplevel):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+        canvas.bind_all("<MouseWheel>",
+                        lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+
         for zone in zones:
             var = tk.BooleanVar(value=True)
             self._vars.append(var)
 
             card = tk.Frame(inner, bg=t["surface"],
                             highlightbackground=t["border"], highlightthickness=1)
-            card.pack(fill="x", pady=3, padx=(0, 4))
+            card.pack(fill="x", pady=4, padx=2)
 
             tk.Checkbutton(card, variable=var, bg=t["surface"],
                            activebackground=t["surface"],
                            selectcolor=t["bg"],
-                           command=self._update_btn).pack(side="left", padx=8, pady=10)
+                           command=self._update_btn).pack(side="left", padx=10, pady=12)
 
             info = tk.Frame(card, bg=t["surface"])
-            info.pack(side="left", fill="x", expand=True, pady=6, padx=(0, 8))
+            info.pack(side="left", fill="x", expand=True, pady=8, padx=(0, 10))
 
-            ctx = (zone["context"][:52] + "…") if len(zone["context"]) > 52 \
-                else zone["context"] or "(paragraf kosong)"
-            tk.Label(info, text=ctx, bg=t["surface"], fg=t["text"],
+            ctx = zone["context"] or "(ruang TTD)"
+            ctx_display = (ctx[:55] + "…") if len(ctx) > 55 else ctx
+            tk.Label(info, text=ctx_display, bg=t["surface"], fg=t["text"],
                      font=(FONT, 9), anchor="w").pack(anchor="w")
 
-            conf = zone["confidence"]
-            badge_clr = t["success"] if conf >= 0.7 else \
-                        t["accent"] if conf >= 0.5 else t["subtext"]
-            src = "📄 Paragraf" if zone["source"] == "paragraph" else "📋 Tabel"
+            conf  = zone["confidence"]
+            badge = t["success"] if conf >= 0.7 else \
+                    t["accent"]  if conf >= 0.5 else t["subtext"]
+            src   = "📋 Tabel" if zone["source"] == "table" else "📄 Paragraf"
+            name  = zone.get("matched_name") or zone.get("keyword") or "-"
+            name_display = (name[:40] + "…") if len(name) > 40 else name
+
             tk.Label(info,
-                     text=f'{src}  ·  Keyword: {zone["keyword"] or "-"}  ·  '
-                          f'Confidence: {conf:.0%}',
-                     bg=t["surface"], fg=badge_clr,
-                     font=(FONT, 8)).pack(anchor="w")
-
-        # Footer
-        footer = tk.Frame(self, bg=t["bg"])
-        footer.pack(fill="x", padx=20, pady=(10, 16))
-
-        tk.Button(footer, text="Batalkan", bg=t["surface"], fg=t["text"],
-                  font=(FONT, 9), relief="flat", padx=14, pady=6, cursor="hand2",
-                  command=self._cancel).pack(side="right", padx=(6, 0))
-
-        self.ok_btn = tk.Button(footer, text=f"Proses ({len(zones)} zona dipilih)",
-                                bg=t["accent"], fg="white",
-                                font=(FONT, 9, "bold"), relief="flat",
-                                padx=14, pady=6, cursor="hand2",
-                                activebackground=t["accent_h"], activeforeground="white",
-                                command=self._ok)
-        self.ok_btn.pack(side="right")
+                     text=f'{src}  ·  Match: {name_display}  ·  Confidence: {conf:.0%}',
+                     bg=t["surface"], fg=badge,
+                     font=(FONT, 8)).pack(anchor="w", pady=(2, 0))
 
     def _update_btn(self):
         n = sum(v.get() for v in self._vars)
-        self.ok_btn.config(text=f"Proses ({n} zona dipilih)")
+        self.ok_btn.config(text=f"Proses  ({n} zona dipilih)")
 
     def _ok(self):
         self.result = [i for i, v in enumerate(self._vars) if v.get()]
@@ -247,7 +252,7 @@ class ZonePreviewDialog(tk.Toplevel):
 
     def _center(self, master, w, h):
         self.update_idletasks()
-        mx = master.winfo_rootx() + (master.winfo_width() - w) // 2
+        mx = master.winfo_rootx() + (master.winfo_width()  - w) // 2
         my = master.winfo_rooty() + (master.winfo_height() - h) // 2
         self.geometry(f"{w}x{h}+{mx}+{my}")
 
@@ -263,65 +268,71 @@ class SettingsDialog(tk.Toplevel):
         t = theme
         self.configure(bg=t["bg"])
         self._build(settings, t)
-        self._center(master, 380, 240)
+        self._center(master, SETTINGS_W, SETTINGS_H)
 
     def _build(self, settings, t):
         tk.Label(self, text="Pengaturan", bg=t["bg"], fg=t["text"],
-                 font=(FONT, 11, "bold")).pack(anchor="w", padx=22, pady=(18, 12))
+                 font=(FONT, 11, "bold")).pack(anchor="w", padx=24, pady=(20, 14))
 
         grid = tk.Frame(self, bg=t["bg"])
-        grid.pack(fill="x", padx=22)
+        grid.pack(fill="x", padx=24)
 
         def row_label(r, text):
             tk.Label(grid, text=text, bg=t["bg"], fg=t["text"],
-                     font=(FONT, 9), width=22, anchor="w").grid(
-                row=r, column=0, sticky="w", pady=8)
+                     font=(FONT, 9), width=24, anchor="w").grid(
+                row=r, column=0, sticky="w", pady=10)
 
-        # Confidence threshold
         row_label(0, "Confidence Threshold")
         self._conf_var = tk.DoubleVar(value=settings.get("confidence_threshold", 0.4))
         tk.Scale(grid, from_=0.1, to=1.0, resolution=0.05, orient="horizontal",
                  variable=self._conf_var, bg=t["bg"], fg=t["text"],
                  troughcolor=t["surface"], highlightthickness=0,
-                 length=180).grid(row=0, column=1, padx=8)
+                 length=200).grid(row=0, column=1, padx=8)
 
-        # Signature width
         row_label(1, "Lebar TTD (inci)")
         self._width_var = tk.DoubleVar(value=settings.get("signature_width_inches", 1.5))
         tk.Scale(grid, from_=0.5, to=3.0, resolution=0.1, orient="horizontal",
                  variable=self._width_var, bg=t["bg"], fg=t["text"],
                  troughcolor=t["surface"], highlightthickness=0,
-                 length=180).grid(row=1, column=1, padx=8)
+                 length=200).grid(row=1, column=1, padx=8)
 
-        # Auto-open PDF
         row_label(2, "Auto-buka PDF selesai")
         self._auto_var = tk.BooleanVar(value=settings.get("auto_open_pdf", True))
         tk.Checkbutton(grid, variable=self._auto_var, bg=t["bg"],
                        activebackground=t["bg"],
-                       selectcolor=t["surface"]).grid(row=2, column=1, sticky="w", padx=8)
+                       selectcolor=t["surface"]).grid(
+            row=2, column=1, sticky="w", padx=8)
 
-        # Footer
+        tk.Frame(self, bg=t["border"], height=1).pack(fill="x", pady=(16, 0))
+
         footer = tk.Frame(self, bg=t["bg"])
-        footer.pack(fill="x", padx=22, pady=(14, 18))
-        tk.Button(footer, text="Batal", bg=t["surface"], fg=t["text"],
-                  font=(FONT, 9), relief="flat", padx=12, pady=6, cursor="hand2",
-                  command=self.destroy).pack(side="right", padx=(6, 0))
-        tk.Button(footer, text="Simpan", bg=t["accent"], fg="white",
-                  font=(FONT, 9, "bold"), relief="flat", padx=16, pady=6,
-                  cursor="hand2", activebackground=t["accent_h"],
-                  activeforeground="white", command=self._save).pack(side="right")
+        footer.pack(fill="x", padx=24, pady=14)
+
+        tk.Button(footer, text="Batal",
+                  bg=t["surface"], fg=t["text"],
+                  font=(FONT, 9), relief="flat",
+                  padx=14, pady=6, cursor="hand2",
+                  highlightbackground=t["border"], highlightthickness=1,
+                  command=self.destroy).pack(side="right", padx=(8, 0))
+
+        tk.Button(footer, text="Simpan",
+                  bg=t["accent"], fg="white",
+                  font=(FONT, 9, "bold"), relief="flat",
+                  padx=18, pady=6, cursor="hand2",
+                  activebackground=t["accent_h"], activeforeground="white",
+                  command=self._save).pack(side="right")
 
     def _save(self):
         self._on_save({
-            "confidence_threshold": round(self._conf_var.get(), 2),
+            "confidence_threshold":   round(self._conf_var.get(), 2),
             "signature_width_inches": round(self._width_var.get(), 1),
-            "auto_open_pdf": self._auto_var.get(),
+            "auto_open_pdf":          self._auto_var.get(),
         })
         self.destroy()
 
     def _center(self, master, w, h):
         self.update_idletasks()
-        mx = master.winfo_rootx() + (master.winfo_width() - w) // 2
+        mx = master.winfo_rootx() + (master.winfo_width()  - w) // 2
         my = master.winfo_rooty() + (master.winfo_height() - h) // 2
         self.geometry(f"{w}x{h}+{mx}+{my}")
 
@@ -339,26 +350,24 @@ class App:
         self.root.configure(bg=self.t["bg"])
 
         self._build()
-        self._center(490, 370)
+        self._center(APP_W, APP_H)
 
-        # Load preset TTD
         preset = load_preset()
         if preset:
             self.sig_card.set_path(preset)
 
-    # ── Build UI ─────────────────────────────────────────────
     def _build(self):
         t = self.t
 
-        # Header
         header = tk.Frame(self.root, bg=t["bg"])
-        header.pack(fill="x", padx=24, pady=(20, 0))
+        header.pack(fill="x", padx=26, pady=(22, 0))
 
         tk.Label(header, text="Word Signer", bg=t["bg"], fg=t["text"],
                  font=(FONT, 16, "bold")).pack(side="left")
 
         self._settings_btn = tk.Button(
-            header, text="⚙", bg=t["bg"], fg=t["subtext"],
+            header, text="⚙",
+            bg=t["bg"], fg=t["subtext"],
             font=("Segoe UI Emoji", 13), relief="flat", bd=0,
             cursor="hand2", padx=4,
             activebackground=t["bg"], activeforeground=t["text"],
@@ -376,25 +385,24 @@ class App:
 
         tk.Label(self.root,
                  text="Tambahkan tanda tangan ke dokumen Word, lalu ekspor ke PDF.",
-                 bg=t["bg"], fg=t["subtext"], font=(FONT, 9)).pack(
-            anchor="w", padx=24, pady=(4, 0))
+                 bg=t["bg"], fg=t["subtext"],
+                 font=(FONT, 9)).pack(anchor="w", padx=26, pady=(5, 0))
 
-        # Divider
-        tk.Frame(self.root, bg=t["border"], height=1).pack(fill="x", pady=(14, 0))
+        tk.Frame(self.root, bg=t["border"], height=1).pack(fill="x", pady=(16, 0))
 
-        # Cards
         body = tk.Frame(self.root, bg=t["bg"])
-        body.pack(fill="x", padx=24, pady=14)
+        body.pack(fill="x", padx=26, pady=16)
 
-        self.docx_card = FileCard(body, "Dokumen Word  (pilih satu atau lebih)",
-                                  ["docx"], multi=True, app=self)
-        self.docx_card.pack(fill="x", pady=(0, 8))
+        self.docx_card = FileCard(
+            body, "Dokumen Word  (pilih satu atau lebih)",
+            ["docx"], multi=True, app=self)
+        self.docx_card.pack(fill="x", pady=(0, 10))
 
-        self.sig_card = FileCard(body, "Tanda Tangan",
-                                 ["png", "jpg", "jpeg", "svg"], multi=False, app=self)
+        self.sig_card = FileCard(
+            body, "Tanda Tangan",
+            ["png", "jpg", "jpeg", "svg"], multi=False, app=self)
         self.sig_card.pack(fill="x")
 
-        # Override sig_card pick to also save preset
         orig_pick = self.sig_card._pick
 
         def _sig_pick_with_preset():
@@ -406,12 +414,10 @@ class App:
         self.sig_card._pick = _sig_pick_with_preset
         self.sig_card.btn.config(command=_sig_pick_with_preset)
 
-        # Divider
-        tk.Frame(self.root, bg=t["border"], height=1).pack(fill="x")
+        tk.Frame(self.root, bg=t["border"], height=1).pack(fill="x", pady=(8, 0))
 
-        # Progress bar (hidden initially)
-        self._pb_frame = tk.Frame(self.root, bg=t["bg"], height=4)
-        self._pb_frame.pack(fill="x", padx=24)
+        self._pb_frame = tk.Frame(self.root, bg=t["bg"])
+        self._pb_frame.pack(fill="x", padx=26)
 
         style = ttk.Style()
         style.theme_use("default")
@@ -423,35 +429,33 @@ class App:
                         darkcolor=t["accent"])
 
         self._progress = ttk.Progressbar(
-            self._pb_frame, mode="indeterminate", length=442,
+            self._pb_frame, mode="indeterminate",
             style="Accent.Horizontal.TProgressbar")
         self._pb_visible = False
 
-        # Footer
         footer = tk.Frame(self.root, bg=t["bg"])
-        footer.pack(fill="x", padx=24, pady=12)
+        footer.pack(fill="x", padx=26, pady=14)
 
-        self._status = tk.Label(footer, text="", bg=t["bg"], fg=t["subtext"],
-                                font=(FONT, 9))
+        self._status = tk.Label(
+            footer, text="", bg=t["bg"], fg=t["subtext"], font=(FONT, 9))
         self._status.pack(side="left", anchor="center")
 
         self._run_btn = tk.Button(
             footer, text="Buat PDF",
             bg=t["accent"], fg="white",
             font=(FONT, 10, "bold"), relief="flat", cursor="hand2",
-            padx=20, pady=8,
+            padx=22, pady=9,
             activebackground=t["accent_h"], activeforeground="white",
             command=self._run)
         self._run_btn.pack(side="right")
 
-    # ── Helpers ───────────────────────────────────────────────
     def _set_status(self, msg, color=None):
         self._status.config(text=msg, fg=color or self.t["subtext"])
         self.root.update()
 
     def _show_progress(self, show: bool):
         if show and not self._pb_visible:
-            self._progress.pack(pady=(4, 0))
+            self._progress.pack(fill="x", pady=(6, 0))
             self._progress.start(10)
             self._pb_visible = True
         elif not show and self._pb_visible:
@@ -459,7 +463,6 @@ class App:
             self._progress.pack_forget()
             self._pb_visible = False
 
-    # ── Run pipeline ──────────────────────────────────────────
     def _run(self):
         t = self.t
         docx_files = self.docx_card.get_all()
@@ -477,23 +480,24 @@ class App:
         success_outputs = []
 
         try:
-            selected_indices = None  # cached zone selection for batch
+            selected_indices = None
 
             for i, docx in enumerate(docx_files):
                 prefix = f"[{i+1}/{len(docx_files)}] " if len(docx_files) > 1 else ""
 
                 self._set_status(f"{prefix}Mendeteksi zona tanda tangan...")
+                print(f"[DEBUG] detect_signature_zones({docx}, {sig})")
                 zones = detect_signature_zones(
-                    docx,
+                    docx, sig,
                     confidence_threshold=self._settings.get("confidence_threshold", 0.4)
                 )
+                print(f"[DEBUG] zones found: {len(zones)} — {zones}")
 
                 if not zones:
                     raise ValueError(
                         f"Zona TTD tidak ditemukan: {os.path.basename(docx)}"
                     )
 
-                # Show zone preview only for first file (apply same selection to batch)
                 if selected_indices is None:
                     self._show_progress(False)
                     dlg = ZonePreviewDialog(self.root, zones, t)
@@ -511,30 +515,40 @@ class App:
 
                 selected_zones = [zones[j] for j in selected_indices
                                   if j < len(zones)]
+                print(f"[DEBUG] selected_zones: {selected_zones}")
 
-                self._set_status(
-                    f"{prefix}Menyisipkan TTD di {len(selected_zones)} zona...")
+                self._set_status(f"{prefix}Menyisipkan TTD di {len(selected_zones)} zona...")
+                print(f"[DEBUG] inject_signature({docx}, {sig}, zones, width={self._settings.get('signature_width_inches', 1.5)})")
                 signed = inject_signature(
                     docx, sig, selected_zones,
                     width_inches=self._settings.get("signature_width_inches", 1.5)
                 )
+                print(f"[DEBUG] inject done — signed bytes: {len(signed) if signed else 'None'}")
 
                 self._set_status(f"{prefix}Mengkonversi ke PDF...")
+                print(f"[DEBUG] convert_to_pdf starting...")
                 pdf = convert_to_pdf(signed)
+                print(f"[DEBUG] PDF bytes: {len(pdf) if pdf else 'None'}")
 
                 output = docx.replace(".docx", "_signed.pdf")
+                print(f"[DEBUG] writing to: {output}")
                 with open(output, "wb") as f:
                     f.write(pdf)
+                print(f"[DEBUG] write done! file exists: {os.path.exists(output)}, size: {os.path.getsize(output)} bytes")
 
                 log_success(docx, output, len(selected_zones))
                 success_outputs.append(output)
 
         except ValueError as e:
+            print(f"[DEBUG] ValueError: {e}")
             self._set_status(str(e), t["error"])
             log_error(docx_files[0] if docx_files else "", str(e))
             messagebox.showerror("Gagal", str(e))
 
         except Exception as e:
+            import traceback
+            print(f"[DEBUG] Exception: {e}")
+            traceback.print_exc()
             self._set_status("Terjadi kesalahan.", t["error"])
             log_error(docx_files[0] if docx_files else "", str(e))
             messagebox.showerror("Error", str(e))
@@ -556,32 +570,26 @@ class App:
                 messagebox.showinfo(
                     "Selesai", f"{len(success_outputs)} PDF berhasil dibuat!")
 
-    # ── Settings ──────────────────────────────────────────────
     def _open_settings(self):
         def on_save(new_settings):
             self._settings.update(new_settings)
             save_settings(self._settings)
         SettingsDialog(self.root, self._settings, self.t, on_save)
 
-    # ── Dark mode toggle ──────────────────────────────────────
     def _toggle_theme(self):
-        # Save current file selections
         docx_paths = self.docx_card.get_all()
-        sig_path = self.sig_card.get()
+        sig_path   = self.sig_card.get()
 
-        # Flip theme
         self._dark = not self._dark
         self.t = THEMES["dark" if self._dark else "light"]
         self._settings["dark_mode"] = self._dark
         save_settings(self._settings)
 
-        # Rebuild UI
         for w in self.root.winfo_children():
             w.destroy()
         self.root.configure(bg=self.t["bg"])
         self._build()
 
-        # Restore file selections
         t = self.t
         if docx_paths:
             self.docx_card.file_paths = docx_paths
@@ -598,10 +606,9 @@ class App:
             self.sig_card.btn.config(text="Ganti file")
             self.sig_card.config(highlightbackground=t["accent"])
 
-    # ── Window centering ──────────────────────────────────────
     def _center(self, w, h):
         self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() - w) // 2
+        x = (self.root.winfo_screenwidth()  - w) // 2
         y = (self.root.winfo_screenheight() - h) // 2
         self.root.geometry(f"{w}x{h}+{x}+{y}")
 
