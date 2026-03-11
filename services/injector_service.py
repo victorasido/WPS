@@ -1,135 +1,178 @@
 # injector_service.py
-# Base: inject simpel, tambah resize agar tidak overflow slot TTD
+# Approach: inject TTD langsung ke PDF via PyMuPDF
+# Strategy: pakai get_text("dict") untuk dapat posisi y tiap baris secara akurat
 
 import io
-from docx import Document
-from docx.shared import Inches, Emu
-from docx.oxml.ns import qn
+import re
+import fitz
 from PIL import Image
 from core.config import ALLOWED_SIGNATURE_FORMATS
 
-EMU_PER_INCH = 914400
-EMU_PER_TWIP = 914400 / 1440
-DPI          = 96
-DEFAULT_LINE_EMU = int(240 * EMU_PER_TWIP)  # ~152,400 EMU = 1 baris normal
+SIGNATURE_PADDING = 4
 
 
-def inject_signature(docx_path: str, signature_path: str,
-                     signature_zones: list, width_inches: float = 1.5) -> bytes:
+def inject_signature(pdf_bytes: bytes, signature_path: str,
+                     signature_zones: list) -> bytes:
     _validate_signature_format(signature_path)
-    signature_bytes = _prepare_signature(signature_path)
-    sig_img = Image.open(io.BytesIO(signature_bytes))
-    sig_w_px, sig_h_px = sig_img.size
+    sig_bytes = _prepare_signature(signature_path)
 
-    doc = Document(docx_path)
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     for zone in signature_zones:
-        if zone["source"] == "paragraph":
-            para      = doc.paragraphs[zone["paragraph_index"]]
-            container = None
-        else:
-            t_idx, r_idx, c_idx, p_idx = zone["table_location"]
-            cell      = doc.tables[t_idx].rows[r_idx].cells[c_idx]
-            para      = cell.paragraphs[p_idx]
-            container = cell
+        matched_name = zone.get("matched_name", "")
+        if not matched_name:
+            continue
 
-        # Hitung max width dari cell, fallback ke width_inches
-        max_w_emu = _get_cell_width_emu(container, width_inches)
+        result = _find_signature_rect(doc, matched_name)
+        if result is None:
+            print(f"[INJ] ⚠ Tidak ditemukan di PDF: {matched_name!r}")
+            continue
 
-        # Hitung max height dari jumlah blank paragraphs di slot ini
-        if container is not None:
-            blank_indices = _get_blank_indices(cell.paragraphs, p_idx)
-            max_h_emu = sum(_get_para_height_emu(cell.paragraphs[i])
-                            for i in blank_indices)
-        else:
-            max_h_emu = int(width_inches * EMU_PER_INCH)  # fallback
+        page, sig_rect = result
+        print(f"[INJ] ✓ {matched_name!r} → page={page.number+1} "
+              f"rect=({sig_rect.x0:.0f},{sig_rect.y0:.0f},"
+              f"{sig_rect.x1:.0f},{sig_rect.y1:.0f})")
 
-        # Resize proporsional agar fit di slot
-        final_w, final_h = _calc_fit_size(
-            sig_w_px, sig_h_px, max_w_emu, max_h_emu
-        )
-
-        # Inject — sama persis dengan base version, cuma width/height dynamic
-        _clear_paragraph(para)
-        run = para.add_run()
-        run.add_picture(io.BytesIO(signature_bytes),
-                        width=Emu(final_w), height=Emu(final_h))
+        _insert_image(page, sig_rect, sig_bytes)
 
     output = io.BytesIO()
     doc.save(output)
+    doc.close()
     output.seek(0)
     return output.read()
 
 
-# ── Helpers ──────────────────────────────────────────────────
+def _find_signature_rect(doc: fitz.Document, matched_name: str):
+    """
+    Cari zona TTD di PDF menggunakan get_text("dict") untuk posisi y akurat.
 
-def _get_blank_indices(paras, inject_p_idx: int) -> list:
-    indices = []
-    j = inject_p_idx
-    while j >= 0 and paras[j].text.strip() == "":
-        indices.insert(0, j)
-        j -= 1
-    return indices
+    Strategy:
+    1. Filter halaman yang mengandung jabatan via blocks (cepat)
+    2. Di halaman itu, ambil semua baris dengan posisi y akurat via "dict"
+    3. Filter baris dalam kolom x yang sama dengan block jabatan
+    4. Cari baris jabatan → cari garis --- di atasnya → hitung zona kosong
+    """
+    target = _normalize(matched_name)
+
+    for page in doc:
+        # Step 1: cari halaman yang relevan
+        blocks_raw = page.get_text("blocks")
+        found_block = None
+        for block in blocks_raw:
+            x0, y0, x1, y1, text, *_ = block
+            if target in _normalize(text):
+                found_block = (x0, y0, x1, y1)
+                break
+        if not found_block:
+            continue
+
+        bx0, by0, bx1, by1 = found_block
+
+        # Step 2: ambil semua baris dengan posisi y akurat
+        page_dict = page.get_text("dict")
+        all_lines = []
+        for blk in page_dict["blocks"]:
+            if blk.get("type") != 0:
+                continue
+            for line in blk.get("lines", []):
+                line_text = " ".join(s["text"] for s in line["spans"]).strip()
+                if not line_text:
+                    continue
+                bbox = line["bbox"]
+                all_lines.append({
+                    "yt": bbox[1], "yb": bbox[3],
+                    "x0": bbox[0], "x1": bbox[2],
+                    "text": line_text
+                })
+
+        # Step 3: filter baris dalam kolom x block jabatan
+        col_lines = [
+            l for l in all_lines
+            if l["x0"] >= bx0 - 15 and l["x1"] <= bx1 + 15
+        ]
+        col_lines.sort(key=lambda l: l["yt"])
+
+        # Step 4: cari jabatan dan garis --- di atasnya
+        jabatan_parts = _split_jabatan(matched_name)
+        first_part    = _normalize(jabatan_parts[0])
+
+        dash_y  = None
+        sig_top = by0
+
+        for i, line in enumerate(col_lines):
+            if first_part not in _normalize(line["text"]):
+                continue
+
+            # Cari garis --- di atas baris jabatan ini
+            for j in range(i - 1, -1, -1):
+                prev = col_lines[j]["text"].replace(" ", "")
+                if len(prev) >= 5 and all(c in "-_" for c in prev):
+                    dash_y = col_lines[j]["yt"]
+                    # sig_top = baris terakhir di atas garis, atau by0
+                    sig_top = col_lines[j - 1]["yb"] + SIGNATURE_PADDING if j > 0 else by0
+                    break
+            break
+
+        if dash_y is None:
+            print(f"[INJ] ⚠ Garis tidak ditemukan di atas: {matched_name!r}")
+            continue
+
+        sig_rect = fitz.Rect(
+            bx0 + SIGNATURE_PADDING,
+            sig_top,
+            bx1 - SIGNATURE_PADDING,
+            dash_y - SIGNATURE_PADDING
+        )
+
+        if sig_rect.height < 10:
+            print(f"[INJ] ⚠ Zona terlalu kecil: {sig_rect.height:.0f}pt")
+            continue
+
+        return page, sig_rect
+
+    return None
 
 
-def _get_para_height_emu(para) -> int:
-    try:
-        pPr = para._p.find(qn("w:pPr"))
-        if pPr is not None:
-            spacing = pPr.find(qn("w:spacing"))
-            if spacing is not None:
-                line = spacing.get(qn("w:line"))
-                if line:
-                    return int(int(line) * EMU_PER_TWIP)
-    except Exception:
-        pass
-    return DEFAULT_LINE_EMU
+def _insert_image(page: fitz.Page, rect: fitz.Rect, sig_bytes: bytes):
+    """Insert gambar ke rect, resize proporsional, bottom-aligned, center horizontal."""
+    img    = Image.open(io.BytesIO(sig_bytes))
+    iw, ih = img.size
+    zone_w = rect.width
+    zone_h = rect.height
+
+    # Fit ke 75% lebar dan 85% tinggi zone
+    max_w  = zone_w * 0.75
+    max_h  = zone_h * 0.85
+    scale  = min(max_w / iw, max_h / ih, 1.0)
+    fw, fh = iw * scale, ih * scale
+
+    # Center horizontal dalam slot
+    cx = rect.x0 + (zone_w - fw) / 2
+    # Bottom-aligned: nempel ke garis ---
+    cy = rect.y1 - fh
+
+    img_rect = fitz.Rect(cx, cy, cx + fw, cy + fh)
+    print(f"[INJ]   zone={zone_w:.0f}x{zone_h:.0f}pt → img={fw:.0f}x{fh:.0f}pt (centered)")
+
+    page.insert_image(img_rect, stream=sig_bytes)
 
 
-def _get_cell_width_emu(container, fallback_inches: float) -> int:
-    if container is not None:
-        try:
-            tcPr = container._tc.find(qn("w:tcPr"))
-            if tcPr is not None:
-                tcW = tcPr.find(qn("w:tcW"))
-                if tcW is not None:
-                    w_val  = tcW.get(qn("w:w"))
-                    w_type = tcW.get(qn("w:type"), "dxa")
-                    if w_val and w_type == "dxa":
-                        return int(int(w_val) * EMU_PER_TWIP)
-        except Exception:
-            pass
-    return int(fallback_inches * EMU_PER_INCH)
+def _normalize(text: str) -> str:
+    return " ".join(text.lower().split())
 
 
-def _calc_fit_size(img_w_px: int, img_h_px: int,
-                   max_w_emu: int, max_h_emu: int) -> tuple:
-    img_w_emu = int(img_w_px / DPI * EMU_PER_INCH)
-    img_h_emu = int(img_h_px / DPI * EMU_PER_INCH)
+def _split_jabatan(matched_name: str) -> list:
+    match = re.search(r'(?<!^)\s+(Divisi\s)', matched_name)
+    if match:
+        idx = match.start()
+        return [matched_name[:idx].strip(), matched_name[idx:].strip()]
+    return [matched_name]
 
-    # Scale by width
-    scale = min(max_w_emu / img_w_emu, 1.0)
-    w = int(img_w_emu * scale)
-    h = int(img_h_emu * scale)
-
-    # Scale by height jika masih overflow
-    if max_h_emu > 0 and h > max_h_emu:
-        scale2 = max_h_emu / h
-        w = int(w * scale2)
-        h = int(h * scale2)
-
-    MIN_EMU = int(0.25 * EMU_PER_INCH)
-    return max(w, MIN_EMU), max(h, MIN_EMU)
-
-
-# ── Format helpers ───────────────────────────────────────────
 
 def _validate_signature_format(signature_path: str):
     ext = signature_path.rsplit(".", 1)[-1].lower()
     if ext not in ALLOWED_SIGNATURE_FORMATS:
-        raise ValueError(
-            f"Format tidak didukung: .{ext}. Gunakan: {ALLOWED_SIGNATURE_FORMATS}"
-        )
+        raise ValueError(f"Format tidak didukung: .{ext}")
 
 
 def _prepare_signature(signature_path: str) -> bytes:
@@ -149,8 +192,9 @@ def _prepare_signature(signature_path: str) -> bytes:
 
 
 def _clear_paragraph(para):
-    p_elem = para._p
-    for r_elem in p_elem.findall(qn("w:r")):
-        p_elem.remove(r_elem)
-    for hl_elem in p_elem.findall(qn("w:hyperlink")):
-        p_elem.remove(hl_elem)
+    from docx.oxml.ns import qn
+    p = para._p
+    for r in p.findall(qn("w:r")):
+        p.remove(r)
+    for hl in p.findall(qn("w:hyperlink")):
+        p.remove(hl)
