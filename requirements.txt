@@ -1,5 +1,14 @@
+# ── Core (existing) ───────────────────────────────────────────
 pymupdf>=1.24.5
 python-docx==1.1.0
 cairosvg==2.7.1
 Pillow>=10.4.0
 docx2pdf>=0.1.8
+
+# ── Stage 2: REST API ─────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9        # wajib untuk file upload di FastAPI
+
+# ── Stage 3: Telegram Bot (coming soon) ───────────────────────
+# python-telegram-bot>=21.0
