@@ -1,7 +1,12 @@
-import os
+# core/config.py
+# Konfigurasi global Word Signer
+# Edit file ini untuk menyesuaikan behavior per institusi / deployment
+
 import platform
 
-# LibreOffice path per OS
+
+# ── LibreOffice ───────────────────────────────────────────────
+
 def get_libreoffice_path() -> str:
     system = platform.system()
     if system == "Windows":
@@ -13,22 +18,39 @@ def get_libreoffice_path() -> str:
 
 LIBREOFFICE_PATH = get_libreoffice_path()
 
-# Format TTD yang diperbolehkan
-ALLOWED_SIGNATURE_FORMATS = ["svg", "png", "jpg", "jpeg"]
 
-# Grid scan setting
-GRID_COLS = 2
-GRID_ROWS = 3
+# ── Detection ─────────────────────────────────────────────────
 
-# Confidence threshold untuk deteksi zona TTD
+# Minimum confidence score untuk zona TTD dianggap valid (0.0 – 1.0)
 CONFIDENCE_THRESHOLD = 0.4
 
-# Lebar default TTD dalam inci
+# Minimal panjang karakter untuk dianggap garis putus-putus (--- atau ___)
+DASH_LINE_MIN = 5
+
+# Jumlah halaman terakhir yang di-scan untuk zona TTD
+# Naikkan jika TTD tersebar di banyak halaman, turunkan untuk lebih ketat
+LAST_PAGES_SCAN = 2
+
+# Baris yang diabaikan saat parsing teks cell
+# Kosongkan list ini untuk institusi non-BNI
+IGNORED_LINES = [
+    "pt. bank negara indonesia (persero) tbk.",
+    "pt. bank negara indonesia (persero)",
+    "tbk.",
+    "tbk",
+]
+
+
+# ── Signature ─────────────────────────────────────────────────
+
+# Format file tanda tangan yang didukung
+ALLOWED_SIGNATURE_FORMATS = ["svg", "png", "jpg", "jpeg"]
+
+# Lebar default tanda tangan dalam inci (dipakai GUI)
 SIGNATURE_WIDTH_INCHES = 1.5
 
-# Auto-buka PDF setelah konversi
-AUTO_OPEN_PDF = True
 
-# Jumlah halaman terakhir yang di-scan untuk deteksi zona TTD
-# Naikan jika TTD tersebar di banyak halaman, turunkan untuk lebih ketat
-LAST_PAGES_SCAN = 2
+# ── App ───────────────────────────────────────────────────────
+
+# Buka PDF otomatis setelah selesai (GUI only)
+AUTO_OPEN_PDF = True

@@ -1,200 +1,594 @@
-# injector_service.py
-# Approach: inject TTD langsung ke PDF via PyMuPDF
-# Strategy: pakai get_text("dict") untuk dapat posisi y tiap baris secara akurat
-
 import io
 import re
 import fitz
 from PIL import Image
-from core.config import ALLOWED_SIGNATURE_FORMATS
 
-SIGNATURE_PADDING = 4
+# ── Constants ────────────────────────────────────────────────
+SIGNATURE_PADDING      = 6
+MIN_SLOT_HEIGHT        = 30
+MIN_GAP_WHITESPACE     = 20
+DEBUG_MODE             = False
+FALLBACK_ABOVE_DISTANCE = 80
+FALLBACK_BELOW_DISTANCE = 60
 
+
+# ── Main ──────────────────────────────────────────────────────
 
 def inject_signature(pdf_bytes: bytes, signature_path: str,
                      signature_zones: list) -> bytes:
-    _validate_signature_format(signature_path)
     sig_bytes = _prepare_signature(signature_path)
-
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    doc       = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     for zone in signature_zones:
-        matched_name = zone.get("matched_name", "")
-        if not matched_name:
+        name = zone.get("matched_name", "")
+        if not name:
             continue
 
-        result = _find_signature_rect(doc, matched_name)
+        # Tambahkan context dari detector untuk context-aware scoring
+        result = _find_signature_rect(doc, name, zone)
         if result is None:
-            print(f"[INJ] ⚠ Tidak ditemukan di PDF: {matched_name!r}")
+            print(f"[INJ] ❌ Gagal detect: {name}")
             continue
 
-        page, sig_rect = result
-        print(f"[INJ] ✓ {matched_name!r} → page={page.number+1} "
-              f"rect=({sig_rect.x0:.0f},{sig_rect.y0:.0f},"
-              f"{sig_rect.x1:.0f},{sig_rect.y1:.0f})")
+        page, rect, method = result
+        print(f"[INJ] ✓ {name} ({method}) → p{page.number+1} {rect}")
 
-        _insert_image(page, sig_rect, sig_bytes)
+        if DEBUG_MODE:
+            page.draw_rect(rect, color=(1, 0, 0), width=1)
 
-    output = io.BytesIO()
-    doc.save(output)
+        _insert_image(page, rect, sig_bytes)
+
+    buf = io.BytesIO()
+    doc.save(buf, deflate=True)
     doc.close()
-    output.seek(0)
-    return output.read()
+    return buf.getvalue()
 
 
-def _find_signature_rect(doc: fitz.Document, matched_name: str):
+# ── Core ──────────────────────────────────────────────────────
+
+def _find_signature_rect(doc, name: str, zone: dict = None):
     """
-    Cari zona TTD di PDF menggunakan get_text("dict") untuk posisi y akurat.
-
+    Cari rect zona TTD dengan context-aware multi-factor scoring.
+    
     Strategy:
-    1. Filter halaman yang mengandung jabatan via blocks (cepat)
-    2. Di halaman itu, ambil semua baris dengan posisi y akurat via "dict"
-    3. Filter baris dalam kolom x yang sama dengan block jabatan
-    4. Cari baris jabatan → cari garis --- di atasnya → hitung zona kosong
+    1. Kumpulkan semua kandidat match
+    2. Tiap kandidat diberi base score (whitespace_above→4, dash_above→3, dll)
+    3. Enhance dengan pattern detection, semantic bias, detector hints
+    4. Pilih skor tertinggi, tiebreak dengan posisi y terbawah
     """
-    target = _normalize(matched_name)
+    zone = zone or {}
+    target_words = _words(name)
+    candidates = []
+
+    # Semantic classification
+    label = _classify_label(name)
+    preferred = zone.get("inject_position")
+    print(f"[INJ] Classification: {name} → {label}, preferred: {preferred}")
 
     for page in doc:
-        # Step 1: cari halaman yang relevan
-        blocks_raw = page.get_text("blocks")
-        found_block = None
-        for block in blocks_raw:
-            x0, y0, x1, y1, text, *_ = block
-            if target in _normalize(text):
-                found_block = (x0, y0, x1, y1)
-                break
-        if not found_block:
+        lines = _extract_lines(page)
+        if not lines:
             continue
 
-        bx0, by0, bx1, by1 = found_block
+        match_indices = _find_all_name_lines(lines, target_words)
 
-        # Step 2: ambil semua baris dengan posisi y akurat
-        page_dict = page.get_text("dict")
-        all_lines = []
-        for blk in page_dict["blocks"]:
-            if blk.get("type") != 0:
-                continue
-            for line in blk.get("lines", []):
-                line_text = " ".join(s["text"] for s in line["spans"]).strip()
-                if not line_text:
+        for match_idx in match_indices:
+            name_line = lines[match_idx]
+            print(f"[INJ] MATCH '{name}' @ p{page.number+1} y={name_line['yt']:.0f}")
+
+            # Pattern detection (role→space→name)
+            pattern = _detect_layout_pattern(lines, match_idx, name_line)
+            if pattern:
+                pattern_type, _, pattern_conf = pattern
+                print(f"[INJ]   📊 Pattern: {pattern_type}, confidence={pattern_conf:.2f}")
+
+            # Loop methods (cleaner than if-else chain)
+            methods = [
+                ("whitespace_above", _find_slot_above, 4),
+                ("dash_above", _find_dash_above, 3),
+                ("whitespace_below", _find_slot_below, 2),
+                ("dash_below", _find_dash_below, 1),
+            ]
+
+            for method_name, fn, base_score in methods:
+                rect = fn(lines, match_idx, name_line)
+                if rect is None:
                     continue
-                bbox = line["bbox"]
-                all_lines.append({
-                    "yt": bbox[1], "yb": bbox[3],
-                    "x0": bbox[0], "x1": bbox[2],
-                    "text": line_text
-                })
 
-        # Step 3: filter baris dalam kolom x block jabatan
-        col_lines = [
-            l for l in all_lines
-            if l["x0"] >= bx0 - 15 and l["x1"] <= bx1 + 15
-        ]
-        col_lines.sort(key=lambda l: l["yt"])
+                has_dash = "dash" in method_name
+                score = _calculate_context_aware_score(
+                    base_score, method_name, label, has_dash, rect, preferred, pattern
+                )
+                candidates.append((page, rect, method_name, score, name_line["yt"]))
 
-        # Step 4: cari jabatan dan garis --- di atasnya
-        jabatan_parts = _split_jabatan(matched_name)
-        first_part    = _normalize(jabatan_parts[0])
+            # Fallback
+            fallback_rect = fitz.Rect(
+                name_line["x0"],
+                name_line["yt"] - FALLBACK_ABOVE_DISTANCE,
+                name_line["x1"],
+                name_line["yt"] - SIGNATURE_PADDING,
+            )
+            candidates.append(
+                (page, _ensure_min_height(fallback_rect), "fallback", 0, name_line["yt"])
+            )
 
-        dash_y  = None
-        sig_top = by0
+    if not candidates:
+        return None
 
-        for i, line in enumerate(col_lines):
-            if first_part not in _normalize(line["text"]):
-                continue
+    best = max(candidates, key=lambda c: (c[3], c[4]))
+    return best[0], best[1], best[2]
 
-            # Cari garis --- di atas baris jabatan ini
-            for j in range(i - 1, -1, -1):
-                prev = col_lines[j]["text"].replace(" ", "")
-                if len(prev) >= 5 and all(c in "-_" for c in prev):
-                    dash_y = col_lines[j]["yt"]
-                    # sig_top = baris terakhir di atas garis, atau by0
-                    sig_top = col_lines[j - 1]["yb"] + SIGNATURE_PADDING if j > 0 else by0
-                    break
+
+# ── Layout Pattern Detection ─────────────────────────────────
+
+def _detect_layout_pattern(lines: list, keyword_idx: int, keyword_line: dict):
+    """
+    Deteksi apakah keyword mengikuti pola struktur tertentu.
+    
+    POLA: Role → Blank Space → Name
+    Contoh:
+        Developer           ← keyword (index 0)
+        [blank space]       ← index 1
+        [blank space]       ← index 2
+        Farino Joshua       ← index 3, nama
+    
+    Return:
+        ("role_space_name", below_slot_range, confidence)
+        atau None jika pola tidak terdeteksi
+    """
+    if keyword_idx >= len(lines) - 2:
+        return None
+    
+    col_cx = keyword_line["cx"]
+    col_x0 = keyword_line["x0"]
+    col_x1 = keyword_line["x1"]
+    tol = (col_x1 - col_x0) * 0.5 + 20
+    
+    # Ambil baris DIBAWAH dalam kolom yang sama
+    lines_below = [
+        (i, l) for i, l in enumerate(lines[keyword_idx + 1:], keyword_idx + 1)
+        if abs(l["cx"] - col_cx) < tol
+    ]
+    
+    if len(lines_below) < 2:
+        return None
+    
+    # Hitung blank lines berturut-turut dari dibawah keyword
+    blank_start_idx = None
+    blank_end_idx = None
+    content_idx = None
+    
+    for i, (idx, line) in enumerate(lines_below):
+        text = line["text"].strip()
+        
+        # Blank line?
+        if not text:
+            if blank_start_idx is None:
+                blank_start_idx = idx
+            blank_end_idx = idx
+        # Content line setelah blanks?
+        elif blank_start_idx is not None and blank_end_idx is not None:
+            # Ini adalah content line SETELAH blank space
+            # Check apakah ini "name-like" (multiple words, mostly text)
+            word_count = len(text.split())
+            if 1 <= word_count <= 5:  # typical name: 1-5 words
+                content_idx = idx
+                break
+        # Content SEBELUM blank? → pola tidak match
+        elif blank_start_idx is None and text:
             break
+    
+    # Pattern detected: role → blanks → name
+    if (blank_start_idx is not None and 
+        blank_end_idx is not None and 
+        content_idx is not None and
+        blank_start_idx >= keyword_idx + 1 and
+        blank_end_idx >= blank_start_idx):
+        
+        # Range untuk inject: antara blank start dan blank end
+        blank_count = blank_end_idx - blank_start_idx + 1
+        confidence = min(0.95, 0.5 + blank_count * 0.2)  # lebih banyak blank = confidence tinggi
+        
+        return ("role_space_name", (blank_start_idx, blank_end_idx), confidence)
+    
+    return None
 
-        if dash_y is None:
-            print(f"[INJ] ⚠ Garis tidak ditemukan di atas: {matched_name!r}")
+
+# ── Classification & Scoring ─────────────────────────────────
+
+def _classify_label(text: str) -> str:
+    """
+    Klasifikasi semantic dari text: apakah nama, role, atau unknown.
+    
+    Heuristic:
+    - ROLE: mengandung keyword seperti manager, head, supervisor, etc.
+    - NAME: 2-4 kata dengan huruf besar
+    - UNKNOWN: tidak clear
+    """
+    text_lower = text.lower()
+    
+    ROLE_HINTS = [
+        "manager", "head", "supervisor", "lead",
+        "director", "approval", "approver", "chief",
+        "officer", "coordinator", "admin", "staff",
+        "division", "department", "unit", "section",
+    ]
+    
+    # Check role hints
+    if any(hint in text_lower for hint in ROLE_HINTS):
+        return "role"
+    
+    # Check if looks like name: 2-4 words, mostly capitalized
+    words = text.split()
+    if 2 <= len(words) <= 4:
+        # Count capitalized words
+        capitalized = sum(1 for w in words if w and w[0].isupper())
+        if capitalized >= len(words) - 1:  # mostly capitalized
+            return "name"
+    
+    return "unknown"
+
+
+def _space_score(rect: fitz.Rect) -> float:
+    """
+    Score kualitas dari space (slot) berdasarkan heightnya.
+    
+    Semakin lebar space, semakin tinggi score.
+    - height > 60 → 2.0 (excellent)
+    - height > 40 → 1.0 (good)
+    - height ≤ 40 → 0.0 (okay/minimal)
+    """
+    height = rect.height
+    
+    if height > 60:
+        return 2.0
+    elif height > 40:
+        return 1.0
+    return 0.0
+
+
+def _calculate_context_aware_score(
+    base_score: float,
+    method: str,
+    label: str,
+    has_dash: bool,
+    rect: fitz.Rect,
+    preferred: str,
+    pattern: tuple = None,
+) -> float:
+    """
+    Hitung final score dengan multi-factor evaluation:
+    
+    Priority (highest → lowest):
+    1. Pattern detection (role→space→name override)
+    2. Semantic bias (name vs role)
+    3. Detector hint (preferred inject position)
+    4. Space quality & dash bonus
+    """
+    score = base_score
+    breakdown = {"base": base_score}
+
+    # ── PRIORITY 1: Pattern Detection (override everything) ──
+    if pattern is not None:
+        pattern_type, _, pattern_conf = pattern
+        if pattern_type == "role_space_name":
+            if "below" in method:
+                bonus = 5.0 * pattern_conf
+                score += bonus
+                breakdown["pattern"] = bonus
+            elif "above" in method:
+                penalty = -3.0 * pattern_conf
+                score += penalty
+                breakdown["pattern"] = penalty
+            if DEBUG_MODE:
+                print(f"[INJ]   Pattern override: {breakdown.get('pattern', 0):.1f}")
+            return score
+
+    # ── PRIORITY 2: Semantic Bias (name vs role) ──
+    semantic_bonus = 0
+    if label == "name":
+        if "above" in method:
+            semantic_bonus = 2.0
+        elif "below" in method:
+            semantic_bonus = -1.0
+    elif label == "role":
+        if "below" in method:
+            semantic_bonus = 2.0
+        else:
+            semantic_bonus = 1.0
+    
+    score += semantic_bonus
+    if semantic_bonus != 0:
+        breakdown["semantic"] = semantic_bonus
+
+    # ── PRIORITY 3: Detector Hint (from DOCX) ──
+    detector_bonus = 0
+    if preferred:
+        if preferred == "above_same" and "above" in method:
+            detector_bonus = 3.5
+        elif preferred == "above_prev_row" and "above" in method:
+            detector_bonus = 2.5
+        elif preferred == "below_same" and "below" in method:
+            detector_bonus = 3.5
+        elif preferred == "below_next_row" and "below" in method:
+            detector_bonus = 2.5
+    
+    score += detector_bonus
+    if detector_bonus > 0:
+        breakdown["detector"] = detector_bonus
+
+    # ── Space quality ──
+    space_bonus = _space_score(rect)
+    score += space_bonus
+    if space_bonus > 0:
+        breakdown["space"] = space_bonus
+
+    # ── Dash bonus ──
+    dash_bonus = 1.5 if has_dash else 0
+    score += dash_bonus
+    if dash_bonus > 0:
+        breakdown["dash"] = dash_bonus
+
+    if DEBUG_MODE:
+        parts = " + ".join(f"{k}={v:.1f}" for k, v in breakdown.items())
+        print(f"[INJ]   {method}: {parts} = {score:.1f}")
+
+    return score
+
+
+# ── Matching ──────────────────────────────────────────────────
+
+def _find_all_name_lines(lines: list, target_words: list) -> list:
+    """
+    Temukan semua index baris yang match dengan target_words.
+    Return list of int (sorted, unique).
+    """
+    if not target_words:
+        return []
+
+    indices = []
+
+    for i, line in enumerate(lines):
+        line_words = _words(line["text"])
+
+        # Full match dalam 1 baris
+        if all(tw in line_words for tw in target_words):
+            indices.append(i)
             continue
 
-        sig_rect = fitz.Rect(
-            bx0 + SIGNATURE_PADDING,
-            sig_top,
-            bx1 - SIGNATURE_PADDING,
-            dash_y - SIGNATURE_PADDING
-        )
+        # Cross-span: 2 baris berurutan berdekatan (gap < 10pt)
+        if i < len(lines) - 1:
+            gap = lines[i + 1]["yt"] - lines[i]["yb"]
+            if gap < 10:
+                combined = _words(lines[i]["text"] + " " + lines[i + 1]["text"])
+                if all(tw in combined for tw in target_words):
+                    indices.append(i + 1)
 
-        if sig_rect.height < 10:
-            print(f"[INJ] ⚠ Zona terlalu kecil: {sig_rect.height:.0f}pt")
+    return sorted(set(indices))
+
+
+# ── Slot detection ────────────────────────────────────────────
+
+def _find_slot_above(lines: list, name_idx: int, name_line: dict):
+    """
+    Cari blank space di atas nama dalam kolom yang sama.
+
+    Perbedaan vs versi lama:
+    - Tidak lagi ambil gap TERBESAR (yang bisa menunjuk ke area JSON/header jauh di atas)
+    - Ambil gap dari baris TERDEKAT di atas nama
+    - Ini memastikan rect benar-benar berada di antara nama dan baris di atasnya
+    """
+    col_cx = name_line["cx"]
+    col_x0 = name_line["x0"]
+    col_x1 = name_line["x1"]
+    tol    = (col_x1 - col_x0) * 0.5 + 20
+
+    # Ambil baris di atas nama dalam kolom yang sama, sorted terdekat dulu
+    col_lines_above = sorted(
+        [l for l in lines if abs(l["cx"] - col_cx) < tol
+         and l["yt"] < name_line["yt"]],
+        key=lambda l: l["yt"],
+        reverse=True,   # terdekat (yt terbesar) duluan
+    )
+
+    if not col_lines_above:
+        return None
+
+    nearest = col_lines_above[0]
+    gap     = name_line["yt"] - nearest["yb"]
+
+    if gap < MIN_GAP_WHITESPACE:
+        return None
+
+    rect = fitz.Rect(
+        col_x0,
+        nearest["yb"] + SIGNATURE_PADDING,
+        col_x1,
+        name_line["yt"] - SIGNATURE_PADDING,
+    )
+    return _ensure_min_height(rect)
+
+
+def _find_dash_above(lines: list, name_idx: int, name_line: dict):
+    """Cari garis --- di atas nama dalam kolom yang sama."""
+    col_cx = name_line["cx"]
+    col_x0 = name_line["x0"]
+    col_x1 = name_line["x1"]
+    tol    = (col_x1 - col_x0) * 0.5 + 20
+
+    for line in reversed(lines[:name_idx]):
+        if abs(line["cx"] - col_cx) > tol:
             continue
-
-        return page, sig_rect
+        txt = line["text"].replace(" ", "")
+        if len(txt) >= 4 and all(c in "-_" for c in txt):
+            rect = fitz.Rect(
+                col_x0,
+                line["yt"] - 80,
+                col_x1,
+                line["yt"] - SIGNATURE_PADDING,
+            )
+            return _ensure_min_height(rect)
 
     return None
 
 
-def _insert_image(page: fitz.Page, rect: fitz.Rect, sig_bytes: bytes):
-    """Insert gambar ke rect, resize proporsional, bottom-aligned, center horizontal."""
-    img    = Image.open(io.BytesIO(sig_bytes))
+def _find_slot_below(lines: list, name_idx: int, name_line: dict):
+    """
+    Cari blank space di BAWAH nama dalam kolom yang sama.
+    Digunakan sebagai fallback ketika slot di atas tidak ditemukan.
+    """
+    col_cx = name_line["cx"]
+    col_x0 = name_line["x0"]
+    col_x1 = name_line["x1"]
+    tol    = (col_x1 - col_x0) * 0.5 + 20
+
+    col_lines_below = sorted(
+        [l for l in lines if abs(l["cx"] - col_cx) < tol
+         and l["yt"] > name_line["yb"]],
+        key=lambda l: l["yt"],
+    )
+
+    if not col_lines_below:
+        return None
+
+    nearest = col_lines_below[0]
+    gap     = nearest["yt"] - name_line["yb"]
+
+    if gap < MIN_GAP_WHITESPACE:
+        return None
+
+    rect = fitz.Rect(
+        col_x0,
+        name_line["yb"] + SIGNATURE_PADDING,
+        col_x1,
+        nearest["yt"] - SIGNATURE_PADDING,
+    )
+    return _ensure_min_height(rect)
+
+
+def _find_dash_below(lines: list, name_idx: int, name_line: dict):
+    """Cari garis --- di BAWAH nama dalam kolom yang sama."""
+    col_cx = name_line["cx"]
+    col_x0 = name_line["x0"]
+    col_x1 = name_line["x1"]
+    tol    = (col_x1 - col_x0) * 0.5 + 20
+
+    for line in lines[name_idx + 1:]:
+        if abs(line["cx"] - col_cx) > tol:
+            continue
+        txt = line["text"].replace(" ", "")
+        if len(txt) >= 4 and all(c in "-_" for c in txt):
+            rect = fitz.Rect(
+                col_x0,
+                line["yb"] + SIGNATURE_PADDING,
+                col_x1,
+                line["yb"] + 80,
+            )
+            return _ensure_min_height(rect)
+
+    return None
+
+
+# ── Image insertion ───────────────────────────────────────────
+
+def _insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
+    """
+    Sisipkan TTD ke dalam rect.
+    - Scale proporsional, fit ke 85% zona (tidak melebihi batas)
+    - Cap upscale 2x agar TTD tidak blur
+    - Bottom-aligned, center horizontal
+    - Guard: cy tidak boleh kurang dari rect.y0
+    """
+    img    = Image.open(io.BytesIO(sig_bytes)).convert("RGBA")
     iw, ih = img.size
+
+    # Hapus background putih/terang agar TTD transparan di PDF
+    sig_bytes = _remove_background(img)
+
     zone_w = rect.width
     zone_h = rect.height
 
-    # Fit ke 75% lebar dan 85% tinggi zone
-    max_w  = zone_w * 0.75
-    max_h  = zone_h * 0.85
-    scale  = min(max_w / iw, max_h / ih, 1.0)
-    fw, fh = iw * scale, ih * scale
+    scale = min(
+        (zone_w * 0.85) / iw,
+        (zone_h * 0.85) / ih,
+        2.0,             # cap upscale 2x
+    )
+    fw = iw * scale
+    fh = ih * scale
 
-    # Center horizontal dalam slot
+    # Center horizontal
     cx = rect.x0 + (zone_w - fw) / 2
-    # Bottom-aligned: nempel ke garis ---
-    cy = rect.y1 - fh
+    # Bottom-aligned, tapi tidak boleh keluar dari atas zona
+    cy = max(rect.y0, rect.y1 - fh)
 
-    img_rect = fitz.Rect(cx, cy, cx + fw, cy + fh)
-    print(f"[INJ]   zone={zone_w:.0f}x{zone_h:.0f}pt → img={fw:.0f}x{fh:.0f}pt (centered)")
-
-    page.insert_image(img_rect, stream=sig_bytes)
+    print(f"[INJ]   zone={zone_w:.0f}x{zone_h:.0f}pt → img={fw:.0f}x{fh:.0f}pt scale={scale:.2f}")
+    page.insert_image(fitz.Rect(cx, cy, cx + fw, cy + fh), stream=sig_bytes)
 
 
-def _normalize(text: str) -> str:
-    return " ".join(text.lower().split())
+# ── Background removal ────────────────────────────────────────
+
+def _remove_background(img: Image.Image) -> bytes:
+    """
+    Hapus background putih/terang dari gambar TTD.
+    Pixel dengan brightness > 240 (hampir putih) → transparan.
+    Hasilnya TTD terlihat bersih di atas PDF tanpa kotak putih.
+    """
+    img  = img.convert("RGBA")
+    data = img.getdata()
+
+    new_data = []
+    for r, g, b, a in data:
+        # Pixel terang (putih/near-white) → transparan
+        if r > 240 and g > 240 and b > 240:
+            new_data.append((255, 255, 255, 0))
+        else:
+            new_data.append((r, g, b, a))
+
+    img.putdata(new_data)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
-def _split_jabatan(matched_name: str) -> list:
-    match = re.search(r'(?<!^)\s+(Divisi\s)', matched_name)
-    if match:
-        idx = match.start()
-        return [matched_name[:idx].strip(), matched_name[idx:].strip()]
-    return [matched_name]
+# ── Utilities ─────────────────────────────────────────────────
+
+def _extract_lines(page) -> list:
+    lines = []
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            text = " ".join(s["text"] for s in line["spans"]).strip()
+            if not text:
+                continue
+            bbox = line["bbox"]
+            lines.append({
+                "text": text,
+                "yt":   bbox[1],
+                "yb":   bbox[3],
+                "x0":   bbox[0],
+                "x1":   bbox[2],
+                "cx":   (bbox[0] + bbox[2]) / 2,
+            })
+    return sorted(lines, key=lambda l: l["yt"])
 
 
-def _validate_signature_format(signature_path: str):
-    ext = signature_path.rsplit(".", 1)[-1].lower()
-    if ext not in ALLOWED_SIGNATURE_FORMATS:
-        raise ValueError(f"Format tidak didukung: .{ext}")
+def _words(text: str) -> list:
+    return re.sub(r"[^a-z0-9\s]", "", text.lower()).split()
 
 
-def _prepare_signature(signature_path: str) -> bytes:
-    ext = signature_path.rsplit(".", 1)[-1].lower()
+def _ensure_min_height(rect: fitz.Rect) -> fitz.Rect:
+    if rect.height < MIN_SLOT_HEIGHT:
+        rect = fitz.Rect(rect.x0, rect.y1 - MIN_SLOT_HEIGHT, rect.x1, rect.y1)
+    return rect
+
+
+def _prepare_signature(path: str) -> bytes:
+    ext = path.rsplit(".", 1)[-1].lower()
     if ext == "svg":
         import cairosvg
-        return cairosvg.svg2png(url=signature_path)
-    elif ext in ["jpg", "jpeg"]:
-        img = Image.open(signature_path).convert("RGBA")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        buf.seek(0)
-        return buf.read()
-    else:
-        with open(signature_path, "rb") as f:
-            return f.read()
-
-
-def _clear_paragraph(para):
-    from docx.oxml.ns import qn
-    p = para._p
-    for r in p.findall(qn("w:r")):
-        p.remove(r)
-    for hl in p.findall(qn("w:hyperlink")):
-        p.remove(hl)
+        return cairosvg.svg2png(url=path)
+    img = Image.open(path).convert("RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
