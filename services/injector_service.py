@@ -82,12 +82,36 @@ def _find_signature_rect(doc, name: str, zone: dict = None):
                 pattern_type, _, pattern_conf = pattern
                 print(f"[INJ]   📊 Pattern: {pattern_type}, confidence={pattern_conf:.2f}")
 
-            # Loop methods (cleaner than if-else chain)
+            # Context-aware method base scores.
+            # Prefer placement direction based on semantic label (role vs name).
+            # Roles typically have signature BELOW; names often have signature ABOVE.
+            if label == "role":
+                base_map = {
+                    "whitespace_above": 1.0,
+                    "dash_above": 0.5,
+                    "whitespace_below": 4.0,
+                    "dash_below": 3.0,
+                }
+            elif label == "name":
+                base_map = {
+                    "whitespace_above": 4.0,
+                    "dash_above": 3.0,
+                    "whitespace_below": 1.0,
+                    "dash_below": 0.5,
+                }
+            else:
+                base_map = {
+                    "whitespace_above": 4.0,
+                    "dash_above": 3.0,
+                    "whitespace_below": 2.0,
+                    "dash_below": 1.0,
+                }
+
             methods = [
-                ("whitespace_above", _find_slot_above, 4),
-                ("dash_above", _find_dash_above, 3),
-                ("whitespace_below", _find_slot_below, 2),
-                ("dash_below", _find_dash_below, 1),
+                ("whitespace_above", _find_slot_above, base_map["whitespace_above"]),
+                ("dash_above", _find_dash_above, base_map["dash_above"]),
+                ("whitespace_below", _find_slot_below, base_map["whitespace_below"]),
+                ("dash_below", _find_dash_below, base_map["dash_below"]),
             ]
 
             for method_name, fn, base_score in methods:
@@ -96,8 +120,14 @@ def _find_signature_rect(doc, name: str, zone: dict = None):
                     continue
 
                 has_dash = "dash" in method_name
+                
+                # Compute available space above and below for spatial heuristic
+                space_above = _compute_space_above(lines, match_idx, name_line)
+                space_below = _compute_space_below(lines, match_idx, name_line)
+                
                 score = _calculate_context_aware_score(
-                    base_score, method_name, label, has_dash, rect, preferred, pattern
+                    base_score, method_name, label, has_dash, rect, preferred, pattern,
+                    space_above=space_above, space_below=space_below
                 )
                 candidates.append((page, rect, method_name, score, name_line["yt"]))
 
@@ -247,6 +277,50 @@ def _space_score(rect: fitz.Rect) -> float:
     return 0.0
 
 
+def _compute_space_above(lines: list, keyword_idx: int, keyword_line: dict) -> float:
+    """
+    Compute available vertical space above the keyword (in points).
+    Useful for spatial heuristic.
+    """
+    col_cx = keyword_line["cx"]
+    col_x0 = keyword_line["x0"]
+    col_x1 = keyword_line["x1"]
+    tol = (col_x1 - col_x0) * 0.5 + 20
+    
+    col_lines_above = [
+        l for l in lines 
+        if abs(l["cx"] - col_cx) < tol and l["yt"] < keyword_line["yt"]
+    ]
+    
+    if not col_lines_above:
+        return 0.0
+    
+    nearest_above = max(col_lines_above, key=lambda l: l["yt"])
+    return keyword_line["yt"] - nearest_above["yb"]
+
+
+def _compute_space_below(lines: list, keyword_idx: int, keyword_line: dict) -> float:
+    """
+    Compute available vertical space below the keyword (in points).
+    Useful for spatial heuristic.
+    """
+    col_cx = keyword_line["cx"]
+    col_x0 = keyword_line["x0"]
+    col_x1 = keyword_line["x1"]
+    tol = (col_x1 - col_x0) * 0.5 + 20
+    
+    col_lines_below = [
+        l for l in lines 
+        if abs(l["cx"] - col_cx) < tol and l["yt"] > keyword_line["yb"]
+    ]
+    
+    if not col_lines_below:
+        return 0.0
+    
+    nearest_below = min(col_lines_below, key=lambda l: l["yt"])
+    return nearest_below["yt"] - keyword_line["yb"]
+
+
 def _calculate_context_aware_score(
     base_score: float,
     method: str,
@@ -255,15 +329,18 @@ def _calculate_context_aware_score(
     rect: fitz.Rect,
     preferred: str,
     pattern: tuple = None,
+    space_above: float = None,
+    space_below: float = None,
 ) -> float:
     """
     Hitung final score dengan multi-factor evaluation:
     
     Priority (highest → lowest):
     1. Pattern detection (role→space→name override)
-    2. Semantic bias (name vs role)
-    3. Detector hint (preferred inject position)
-    4. Space quality & dash bonus
+    2. HARD CONSTRAINT: if preferred from high-confidence detector → strongly bias or enforce
+    3. Spatial heuristic: if space_above >> space_below, favor above (and vice versa)
+    4. Semantic bias (name vs role)
+    5. Space quality & dash bonus
     """
     score = base_score
     breakdown = {"base": base_score}
@@ -284,7 +361,55 @@ def _calculate_context_aware_score(
                 print(f"[INJ]   Pattern override: {breakdown.get('pattern', 0):.1f}")
             return score
 
-    # ── PRIORITY 2: Semantic Bias (name vs role) ──
+    # ── PRIORITY 2: HARD CONSTRAINT from high-confidence detector ──
+    # If preferred is set, assume detector found it with good confidence.
+    # Strongly bias (or enforce) placement direction.
+    if preferred:
+        if preferred == "above_same" and "above" in method:
+            detector_bonus = 8.0  # Increased from 3.5
+            score += detector_bonus
+            breakdown["detector_hard"] = detector_bonus
+        elif preferred == "above_prev_row" and "above" in method:
+            detector_bonus = 7.0  # Increased from 2.5
+            score += detector_bonus
+            breakdown["detector_hard"] = detector_bonus
+        elif preferred == "below_same" and "below" in method:
+            detector_bonus = 8.0  # Increased from 3.5
+            score += detector_bonus
+            breakdown["detector_hard"] = detector_bonus
+        elif preferred == "below_next_row" and "below" in method:
+            detector_bonus = 7.0  # Increased from 2.5
+            score += detector_bonus
+            breakdown["detector_hard"] = detector_bonus
+        elif preferred:
+            # Penalty for methods that don't match hint
+            penalty = -5.0
+            score += penalty
+            breakdown["detector_penalty"] = penalty
+
+    # ── PRIORITY 3: Spatial heuristic ──
+    # If space difference is large, strongly bias
+    if space_above is not None and space_below is not None:
+        diff = space_below - space_above
+        if abs(diff) > 40:  # significant difference
+            if diff > 0 and "below" in method:
+                spatial_bonus = 3.0
+                score += spatial_bonus
+                breakdown["spatial"] = spatial_bonus
+            elif diff < 0 and "above" in method:
+                spatial_bonus = 3.0
+                score += spatial_bonus
+                breakdown["spatial"] = spatial_bonus
+            elif diff > 0 and "above" in method:
+                spatial_penalty = -2.0
+                score += spatial_penalty
+                breakdown["spatial"] = spatial_penalty
+            elif diff < 0 and "below" in method:
+                spatial_penalty = -2.0
+                score += spatial_penalty
+                breakdown["spatial"] = spatial_penalty
+
+    # ── PRIORITY 4: Semantic Bias (name vs role) ──
     semantic_bonus = 0
     if label == "name":
         if "above" in method:
@@ -300,22 +425,6 @@ def _calculate_context_aware_score(
     score += semantic_bonus
     if semantic_bonus != 0:
         breakdown["semantic"] = semantic_bonus
-
-    # ── PRIORITY 3: Detector Hint (from DOCX) ──
-    detector_bonus = 0
-    if preferred:
-        if preferred == "above_same" and "above" in method:
-            detector_bonus = 3.5
-        elif preferred == "above_prev_row" and "above" in method:
-            detector_bonus = 2.5
-        elif preferred == "below_same" and "below" in method:
-            detector_bonus = 3.5
-        elif preferred == "below_next_row" and "below" in method:
-            detector_bonus = 2.5
-    
-    score += detector_bonus
-    if detector_bonus > 0:
-        breakdown["detector"] = detector_bonus
 
     # ── Space quality ──
     space_bonus = _space_score(rect)
@@ -508,21 +617,45 @@ def _insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
     zone_w = rect.width
     zone_h = rect.height
 
-    scale = min(
-        (zone_w * 0.85) / iw,
-        (zone_h * 0.85) / ih,
-        2.0,             # cap upscale 2x
-    )
-    fw = iw * scale
-    fh = ih * scale
+    # Initial scale (fit to 85% of zone, cap upscale)
+    max_scale = min((zone_w * 0.85) / iw, (zone_h * 0.85) / ih, 2.0)
+    min_scale = 0.4
+    step = 0.1
 
-    # Center horizontal
-    cx = rect.x0 + (zone_w - fw) / 2
-    # Bottom-aligned, tapi tidak boleh keluar dari atas zona
-    cy = max(rect.y0, rect.y1 - fh)
+    inserted = False
+    tried_scales = []
 
-    print(f"[INJ]   zone={zone_w:.0f}x{zone_h:.0f}pt → img={fw:.0f}x{fh:.0f}pt scale={scale:.2f}")
-    page.insert_image(fitz.Rect(cx, cy, cx + fw, cy + fh), stream=sig_bytes)
+    # Try decreasing scales until no text overlap or until min_scale
+    s = max_scale
+    while s >= min_scale:
+        fw = iw * s
+        fh = ih * s
+
+        # Center horizontal
+        cx = rect.x0 + (zone_w - fw) / 2
+        # Bottom-aligned, but ensure not above rect.y0
+        cy = max(rect.y0, rect.y1 - fh)
+
+        img_rect = fitz.Rect(cx, cy, cx + fw, cy + fh)
+        tried_scales.append(s)
+
+        if not _rect_overlaps_text(page, img_rect):
+            print(f"[INJ]   zone={zone_w:.0f}x{zone_h:.0f}pt → img={fw:.0f}x{fh:.0f}pt scale={s:.2f}")
+            page.insert_image(img_rect, stream=sig_bytes)
+            inserted = True
+            break
+
+        s -= step
+
+    if not inserted:
+        # Last resort: insert at smallest scale even if overlap (so user still gets PDF)
+        s = max(min_scale, min(max_scale, s + step))
+        fw = iw * s
+        fh = ih * s
+        cx = rect.x0 + (zone_w - fw) / 2
+        cy = max(rect.y0, rect.y1 - fh)
+        print(f"[INJ]   fallback insert (overlap) scale={s:.2f}, tried={tried_scales}")
+        page.insert_image(fitz.Rect(cx, cy, cx + fw, cy + fh), stream=sig_bytes)
 
 
 # ── Background removal ────────────────────────────────────────
@@ -548,6 +681,33 @@ def _remove_background(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _rect_overlaps_text(page, rect: fitz.Rect) -> bool:
+    """
+    Check whether a given rect overlaps with any non-empty text span on the page.
+    Returns True if overlap detected, False otherwise.
+    """
+    try:
+        data = page.get_text("dict")
+    except Exception:
+        return False
+
+    for block in data.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text = span.get("text", "").strip()
+                if not text:
+                    continue
+                bbox = span.get("bbox")
+                if not bbox or len(bbox) < 4:
+                    continue
+                span_rect = fitz.Rect(bbox)
+                if rect.intersects(span_rect):
+                    return True
+    return False
 
 
 # ── Utilities ─────────────────────────────────────────────────
