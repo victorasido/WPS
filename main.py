@@ -7,11 +7,15 @@ import platform
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+import logging
 from services.detector_service import detect_signature_zones
 from services.injector_service import inject_signature
 from services.converter_service import convert_to_pdf
+from services.docx_injector_service import inject_signature_to_docx, PlaceholderNotFoundError
 from services.preset_service import load_preset, save_preset, load_settings, save_settings
 from services.logger_service import log_success, log_error
+
+logger = logging.getLogger(__name__)
 
 # ── Themes ────────────────────────────────────────────────────
 THEMES = {
@@ -521,79 +525,117 @@ class App:
         success_outputs = []
 
         try:
-            # Zone preview dilakukan sekali di file pertama,
-            # lalu selected_indices dipakai ulang untuk file berikutnya dalam batch.
+            # selected_indices dipakai ulang untuk file berikutnya dalam batch
+            # (hanya relevan untuk FALLBACK mode — TEMPLATE mode skip zone dialog)
             selected_indices: list | None = None
 
             for i, docx in enumerate(docx_files):
                 prefix = f"[{i+1}/{len(docx_files)}] " if len(docx_files) > 1 else ""
 
-                # 1. Detect zones
-                self._set_status(
-                    f'{prefix}Mencari "{keyword}" di {os.path.basename(docx)}...'
-                )
-                zones = detect_signature_zones(
-                    docx, sig,
-                    confidence_threshold=self._settings.get("confidence_threshold", 0.4),
-                    last_pages=self._settings.get("last_pages_scan", 2),
-                )
+                try:  # ← per-file error handling agar batch tidak berhenti di 1 file gagal
 
-                if not zones:
-                    raise ValueError(
-                        f'Keyword "{keyword}" tidak ditemukan di:\n{os.path.basename(docx)}'
-                    )
+                    # ── STEP 0: Baca DOCX ──
+                    with open(docx, "rb") as f:
+                        docx_bytes = f.read()
 
-                # 2. Zone preview — hanya untuk file pertama di batch
-                if selected_indices is None:
-                    self._show_progress(False)
-                    dlg = ZonePreviewDialog(self.root, zones, keyword, t)
-                    self.root.wait_window(dlg)
-                    self._show_progress(True)
+                    # ── STEP 1: COBA TEMPLATE MODE (primary flow) ──
+                    mode = None
+                    try:
+                        self._set_status(f"{prefix}[TEMPLATE] Mencari placeholder...")
+                        modified_docx = inject_signature_to_docx(docx_bytes, sig, keyword)
 
-                    if dlg.result is None:
-                        self._set_status("Dibatalkan.", t["subtext"])
-                        return
-                    selected_indices = dlg.result
-                    if not selected_indices:
-                        self._set_status("Tidak ada zona dipilih.", t["subtext"])
-                        return
+                        self._set_status(f"{prefix}[TEMPLATE] Mengkonversi ke PDF...")
+                        signed_pdf = convert_to_pdf(modified_docx)
+                        mode = "TEMPLATE"
+                        logger.info(f"[{os.path.basename(docx)}] Template mode berhasil")
 
-                # Guard: jika file batch punya lebih sedikit zona, pakai yang ada
-                selected_zones = [zones[j] for j in selected_indices if j < len(zones)]
-                if not selected_zones:
-                    selected_zones = zones  # fallback: pakai semua
+                    except PlaceholderNotFoundError as e:
+                        # ── FALLBACK: DETECTION MODE ──
+                        logger.info(
+                            f"[{os.path.basename(docx)}] Fallback ke detection: {e}"
+                        )
+                        self._set_status(
+                            f'{prefix}[FALLBACK] Mencari "{keyword}"...'
+                        )
 
-                # 3. Convert DOCX → PDF
-                self._set_status(f"{prefix}Mengkonversi ke PDF...")
-                with open(docx, "rb") as f:
-                    docx_bytes = f.read()
-                pdf_bytes = convert_to_pdf(docx_bytes)
+                        zones = detect_signature_zones(
+                            docx, sig,
+                            confidence_threshold=self._settings.get(
+                                "confidence_threshold", 0.4
+                            ),
+                            last_pages=self._settings.get("last_pages_scan", 2),
+                        )
 
-                # 4. Inject TTD ke PDF
-                self._set_status(
-                    f"{prefix}Menyisipkan TTD di {len(selected_zones)} zona..."
-                )
-                signed_pdf = inject_signature(pdf_bytes, sig, selected_zones)
+                        if not zones:
+                            raise ValueError(
+                                f'Keyword "{keyword}" tidak ditemukan di:\n'
+                                f'{os.path.basename(docx)}'
+                            )
 
-                # 5. Simpan
-                output = docx.replace(".docx", "_signed.pdf")
-                with open(output, "wb") as f:
-                    f.write(signed_pdf)
+                        # Zone preview — hanya untuk file pertama dalam batch
+                        if selected_indices is None:
+                            self._show_progress(False)
+                            dlg = ZonePreviewDialog(self.root, zones, keyword, t)
+                            self.root.wait_window(dlg)
+                            self._show_progress(True)
 
-                log_success(docx, output, len(selected_zones))
-                success_outputs.append(output)
+                            if dlg.result is None:
+                                self._set_status("Dibatalkan.", t["subtext"])
+                                return
+                            selected_indices = dlg.result
+                            if not selected_indices:
+                                self._set_status(
+                                    "Tidak ada zona dipilih.", t["subtext"]
+                                )
+                                return
 
-        except ValueError as e:
-            self._set_status(str(e), t["error"])
-            log_error(docx_files[0] if docx_files else "", str(e))
-            messagebox.showerror("Tidak Ditemukan", str(e))
+                        # Guard: file batch mungkin punya lebih sedikit zona
+                        selected_zones = [
+                            zones[j] for j in selected_indices if j < len(zones)
+                        ]
+                        if not selected_zones:
+                            self._set_status(
+                                f"{prefix}Tidak ada zona cocok di file ini. Skip.",
+                                t["subtext"],
+                            )
+                            continue
 
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            self._set_status("Terjadi kesalahan.", t["error"])
-            log_error(docx_files[0] if docx_files else "", str(e))
-            messagebox.showerror("Error", str(e))
+                        self._set_status(f"{prefix}[FALLBACK] Mengkonversi ke PDF...")
+                        pdf_bytes = convert_to_pdf(docx_bytes)
+
+                        self._set_status(
+                            f"{prefix}[FALLBACK] Menyisipkan TTD di "
+                            f"{len(selected_zones)} zona..."
+                        )
+                        signed_pdf = inject_signature(pdf_bytes, sig, selected_zones)
+                        mode = "FALLBACK"
+                        logger.info(
+                            f"[{os.path.basename(docx)}] Fallback mode berhasil "
+                            f"({len(selected_zones)} zona)"
+                        )
+
+                    # ── STEP 2: Simpan output ──
+                    output = docx.replace(".docx", "_signed.pdf")
+                    with open(output, "wb") as f:
+                        f.write(signed_pdf)
+
+                    zone_count = 1 if mode == "TEMPLATE" else len(selected_zones)
+                    log_success(docx, output, zone_count)
+                    success_outputs.append(output)
+                    self._set_status(f"{prefix}✓ Selesai ({mode})", t["success"])
+
+                except ValueError as e:
+                    # Keyword tidak ditemukan → informative, lanjut ke file berikutnya
+                    self._set_status(f"{prefix}❌ {str(e)}", t["error"])
+                    log_error(docx, str(e))
+                    continue
+
+                except Exception as e:
+                    # Error tak terduga → log dan lanjut ke file berikutnya
+                    logger.exception(f"Error saat proses {os.path.basename(docx)}")
+                    self._set_status(f"{prefix}❌ {str(e)}", t["error"])
+                    log_error(docx, str(e))
+                    continue
 
         finally:
             self._show_progress(False)

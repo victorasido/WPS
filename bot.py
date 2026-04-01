@@ -30,6 +30,7 @@ from telegram.ext import (
 from services.detector_service import detect_signature_zones
 from services.converter_service import convert_to_pdf
 from services.injector_service import inject_signature
+from services.docx_injector_service import inject_signature_to_docx, PlaceholderNotFoundError
 from services.logger_service import log_success, log_error
 
 load_dotenv()
@@ -302,9 +303,26 @@ async def receive_sign(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             with open(sign_path, "wb") as f:
                 f.write(sign_bytes)
 
-            zones = detect_signature_zones(
-                docx_path, sign_path, confidence_threshold=0.4
-            )
+            # ── STEP 1: TRY TEMPLATE MODE (PRIMARY) ──────────────────
+            zones = []
+            try:
+                await msg.edit_text("📋 [TEMPLATE] Mencari placeholder...")
+                modified_docx = inject_signature_to_docx(
+                    session["docx_bytes"], sign_path, keyword
+                )
+                session["template_mode"] = True
+                session["modified_docx"] = modified_docx  # sudah ada TTD, tinggal convert
+                zones = [{"matched_name": keyword, "confidence": 1.0, "keyword": keyword}]
+                logger.info(f"[{user_id}] Template mode detected")
+
+            except PlaceholderNotFoundError:
+                # ── FALLBACK: DETECTION MODE ──────────────────────────
+                logger.info(f"[{user_id}] No placeholder found, using detection fallback")
+                await msg.edit_text("🔍 [FALLBACK] Mencari zona TTD...")
+                zones = detect_signature_zones(
+                    docx_path, sign_path, confidence_threshold=0.4
+                )
+                session["template_mode"] = False
 
         if not zones:
             _add_history(user_id, session["docx_name"], keyword, 0, False)
@@ -333,10 +351,22 @@ async def receive_sign(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             user_sessions.pop(user_id, None)
             return ConversationHandler.END
 
-        # Normal mode → zone selection
         session["zones"]    = zones
         session["selected"] = set(range(len(zones)))
 
+        # ── TEMPLATE MODE: skip zone selection, langsung konfirmasi ──
+        if session.get("template_mode"):
+            await msg.edit_text(
+                f"✅ *[TEMPLATE]* Placeholder ditemukan!\n\n"
+                "Tekan tombol di bawah untuk proses.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✍️  Proses", callback_data=CB_ZONE_CONFIRM)
+                ]]),
+            )
+            return WAIT_ZONE_SELECT
+
+        # ── FALLBACK MODE: zone selection dialog normal ──
         await msg.edit_text(
             f"✅ Ditemukan *{len(zones)} zona* untuk keyword `{keyword}`.\n\n"
             "Pilih zona yang akan di-inject, lalu tekan *Proses*:",
@@ -408,13 +438,13 @@ async def _process_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE, stat
 
     docx_name      = session["docx_name"]
     sign_name      = session["sign_name"]
-    docx_bytes     = session["docx_bytes"]
     sign_bytes     = session["sign_bytes"]
     zones          = session["zones"]
     selected       = session["selected"]
     selected_zones = [zones[i] for i in sorted(selected)]
     keyword        = os.path.splitext(sign_name)[0]
     chat_id        = session["chat_id"]
+    is_template    = session.get("template_mode", False)
     success        = False
 
     try:
@@ -423,35 +453,49 @@ async def _process_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE, stat
             with open(sign_path, "wb") as f:
                 f.write(sign_bytes)
 
-            # Step 1: Convert
-            await status_msg.edit_text("📄 Mengkonversi dokumen ke PDF...")
-            pdf_bytes = convert_to_pdf(docx_bytes)
+            if is_template:
+                # ── TEMPLATE PATH: modified_docx sudah ada TTD → tinggal convert ──
+                await status_msg.edit_text("📋 [TEMPLATE] Mengkonversi DOCX ke PDF...")
+                modified_docx = session["modified_docx"]
+                signed_pdf = convert_to_pdf(modified_docx)
+                logger.info(f"[{user_id}] Template path: converted modified DOCX to PDF")
+            else:
+                # ── FALLBACK PATH: original docx → PDF → inject TTD ──
+                docx_bytes = session["docx_bytes"]
 
-            # Step 2: Inject
-            await status_msg.edit_text(
-                f"✍️ Menyisipkan tanda tangan di {len(selected_zones)} zona..."
+                await status_msg.edit_text("📄 Mengkonversi dokumen ke PDF...")
+                pdf_bytes = convert_to_pdf(docx_bytes)
+
+                await status_msg.edit_text(
+                    f"✍️ Menyisipkan tanda tangan di {len(selected_zones)} zona..."
+                )
+                signed_pdf = inject_signature(pdf_bytes, sign_path, selected_zones)
+                logger.info(f"[{user_id}] Fallback path: injected {len(selected_zones)} zones")
+
+        # ── Kirim PDF ───────────────────────────────────────────
+        output_name = docx_name.replace(".docx", "_signed.pdf")
+        mode_label  = "📋 Template" if is_template else f"🔍 Fallback ({len(selected_zones)} zona)"
+
+        if is_template:
+            zone_summary = f"  1. `{keyword}` (template placeholder • 100%)"
+        else:
+            zone_summary = "\n".join(
+                f"  {i+1}. `{(z.get('matched_name') or keyword)[:45]}` "
+                f"({z['confidence']:.0%} · {_tier_label(z['confidence'])})"
+                for i, z in enumerate(selected_zones[:6])
             )
-            signed_pdf = inject_signature(pdf_bytes, sign_path, selected_zones)
-
-        # Step 3: Kirim PDF via chat_id — tidak bergantung pada effective_message
-        output_name  = docx_name.replace(".docx", "_signed.pdf")
-        zone_summary = "\n".join(
-            f"  {i+1}. `{(z.get('matched_name') or keyword)[:45]}` "
-            f"({z['confidence']:.0%} · {_tier_label(z['confidence'])})"
-            for i, z in enumerate(selected_zones[:6])
-        )
-        if len(selected_zones) > 6:
-            zone_summary += f"\n  _...dan {len(selected_zones) - 6} zona lainnya_"
+            if len(selected_zones) > 6:
+                zone_summary += f"\n  _...dan {len(selected_zones) - 6} zona lainnya_"
 
         await ctx.bot.send_document(
             chat_id=chat_id,
             document=io.BytesIO(signed_pdf),
             filename=output_name,
             caption=(
-                f"✅ *Selesai!*\n\n"
+                f"✅ *Selesai! ({mode_label})*\n\n"
                 f"📋 `{docx_name}`\n"
                 f"🔑 Keyword: `{keyword}`\n"
-                f"✍️ Zona TTD ({len(selected_zones)}):\n{zone_summary}\n\n"
+                f"✍️ Tanda tangan:\n{zone_summary}\n\n"
                 f"📎 `{output_name}`\n\n"
                 f"_Ketik /sign untuk dokumen berikutnya._"
             ),
@@ -462,13 +506,13 @@ async def _process_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE, stat
             pool_timeout=60,
         )
 
-        # Hapus pesan status setelah PDF berhasil terkirim
         try:
             await status_msg.delete()
         except Exception:
             pass
 
-        log_success(docx_name, "telegram_output", len(selected_zones))
+        n_zones = 1 if is_template else len(selected_zones)
+        log_success(docx_name, "telegram_output", n_zones)
         success = True
 
     except Exception as e:
@@ -485,7 +529,8 @@ async def _process_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE, stat
 
     finally:
         active_users.discard(user_id)
-        _add_history(user_id, docx_name, keyword, len(selected_zones), success)
+        n_zones = 1 if is_template else len(selected_zones)
+        _add_history(user_id, docx_name, keyword, n_zones, success)
         user_sessions.pop(user_id, None)
 
     return ConversationHandler.END

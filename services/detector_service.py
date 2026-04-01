@@ -123,6 +123,32 @@ def detect_signature_zones(
                     "inject_position": inject_position,
                 })
 
+    # ── PARAGRAPH SCANNING: cari keyword di paragraf luar tabel ─────────
+    for p_idx, para in enumerate(doc.paragraphs):
+        para_text = para.text.strip()
+        if not para_text:
+            continue
+
+        match_result = _match_cascade(keyword, para_text)
+        if match_result is None:
+            continue
+
+        matched_text, confidence = match_result
+
+        if confidence < confidence_threshold:
+            continue
+
+        zones.append({
+            "source":          "paragraph",
+            "paragraph_index": p_idx,          # paragraf body — index kecil = awal dokumen
+            "table_location":  None,
+            "matched_name":    matched_text.strip(),
+            "keyword":         keyword,
+            "confidence":      round(confidence, 2),
+            "context":         para_text[:80],
+            "inject_position": "below_same",   # default untuk paragraf body
+        })
+
     zones.sort(key=lambda z: z["paragraph_index"])
     return zones
 

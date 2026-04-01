@@ -1,7 +1,10 @@
 import io
 import re
+import logging
 import fitz
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────
 SIGNATURE_PADDING      = 6
@@ -16,32 +19,103 @@ FALLBACK_BELOW_DISTANCE = 60
 
 def inject_signature(pdf_bytes: bytes, signature_path: str,
                      signature_zones: list) -> bytes:
+    """
+    Inject signatures into PDF at specified zones.
+
+    Primary path  : geometry-based placement via pdf_placer
+                    (layout-aware, handles multi-column, no hardcoded logic)
+    Fallback path : legacy keyword-scoring (_find_signature_rect)
+                    used only if geometry placer returns 0 results
+
+    Public API unchanged — callers (main.py, bot.py) need no modification.
+    """
+    from services.pdf_placer import place_all_signatures, SignaturePlacement
+
     sig_bytes = _prepare_signature(signature_path)
     doc       = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    for zone in signature_zones:
-        name = zone.get("matched_name", "")
-        if not name:
-            continue
+    # Extract keyword: prefer explicit 'keyword' field, fall back to matched_name
+    keyword = ""
+    if signature_zones:
+        keyword = (signature_zones[0].get("keyword")
+                   or signature_zones[0].get("matched_name")
+                   or "")
 
-        # Tambahkan context dari detector untuk context-aware scoring
-        result = _find_signature_rect(doc, name, zone)
-        if result is None:
-            print(f"[INJ] ❌ Gagal detect: {name}")
-            continue
+    # ── PRIMARY: geometry-based placement ──
+    max_count  = len(signature_zones) if signature_zones else None
+    placements = place_all_signatures(
+        doc, keyword,
+        zones_hint=signature_zones,
+        max_count=max_count,
+    )
 
-        page, rect, method = result
-        print(f"[INJ] ✓ {name} ({method}) → p{page.number+1} {rect}")
+    # ── FALLBACK: legacy keyword-scoring (with dedup fix) ──
+    if not placements:
+        logger.info("[INJ] Geometry placer got 0 results — switching to legacy mode")
+        placements = _legacy_place(doc, keyword, signature_zones)
 
+    # ── Insert images ──
+    injected_count = 0
+    for p in placements:
+        logger.info(
+            f"[INJ] ✓ [{p.method}] p{p.page.number + 1} "
+            f"({p.rect.width:.0f}×{p.rect.height:.0f}pt)"
+        )
         if DEBUG_MODE:
-            page.draw_rect(rect, color=(1, 0, 0), width=1)
+            p.page.draw_rect(p.rect, color=(1, 0, 0), width=1)
+        _insert_image(p.page, p.rect, sig_bytes)
+        injected_count += 1
 
-        _insert_image(page, rect, sig_bytes)
+    if injected_count == 0 and signature_zones:
+        doc.close()
+        raise Exception(
+            f"Gagal inject ke semua zona. Keyword: '{keyword}'"
+        )
 
     buf = io.BytesIO()
     doc.save(buf, deflate=True)
     doc.close()
     return buf.getvalue()
+
+
+def _legacy_place(doc, keyword: str, zones: list) -> list:
+    """
+    Legacy per-zone placement using the old keyword+scoring approach.
+    Includes deduplication guard: if multiple zones map to the same rect
+    (the original 5x-Division-Head bug), only the first instance is kept.
+    """
+    from services.pdf_placer.types import SignaturePlacement
+
+    placements = []
+    seen_rects: set = set()
+
+    for zone in zones:
+        name   = zone.get("matched_name") or keyword
+        result = _find_signature_rect(doc, name, zone)
+        if result is None:
+            logger.warning(f"[INJ] ❌ Legacy: gagal detect '{name}'")
+            continue
+
+        page, rect, method = result
+
+        # Dedup guard — same rect position means duplicate, skip
+        key = (page.number, round(rect.x0), round(rect.y0))
+        if key in seen_rects:
+            logger.warning(
+                f"[INJ] ⚠ Legacy: rect duplikat di p{page.number + 1} "
+                f"({rect.x0:.0f},{rect.y0:.0f}), skip"
+            )
+            continue
+        seen_rects.add(key)
+
+        placements.append(SignaturePlacement(
+            page=page, rect=rect,
+            method=f"legacy_{method}", confidence=0.5,
+        ))
+
+    return placements
+
+
 
 
 # ── Core ──────────────────────────────────────────────────────
@@ -63,7 +137,7 @@ def _find_signature_rect(doc, name: str, zone: dict = None):
     # Semantic classification
     label = _classify_label(name)
     preferred = zone.get("inject_position")
-    print(f"[INJ] Classification: {name} → {label}, preferred: {preferred}")
+    logger.debug(f"[INJ] Classification: {name} → {label}, preferred: {preferred}")
 
     for page in doc:
         lines = _extract_lines(page)
@@ -74,13 +148,13 @@ def _find_signature_rect(doc, name: str, zone: dict = None):
 
         for match_idx in match_indices:
             name_line = lines[match_idx]
-            print(f"[INJ] MATCH '{name}' @ p{page.number+1} y={name_line['yt']:.0f}")
+            logger.debug(f"[INJ] MATCH '{name}' @ p{page.number+1} y={name_line['yt']:.0f}")
 
             # Pattern detection (role→space→name)
             pattern = _detect_layout_pattern(lines, match_idx, name_line)
             if pattern:
                 pattern_type, _, pattern_conf = pattern
-                print(f"[INJ]   📊 Pattern: {pattern_type}, confidence={pattern_conf:.2f}")
+                logger.debug(f"[INJ]   📊 Pattern: {pattern_type}, confidence={pattern_conf:.2f}")
 
             # Context-aware method base scores.
             # Prefer placement direction based on semantic label (role vs name).
@@ -358,7 +432,7 @@ def _calculate_context_aware_score(
                 score += penalty
                 breakdown["pattern"] = penalty
             if DEBUG_MODE:
-                print(f"[INJ]   Pattern override: {breakdown.get('pattern', 0):.1f}")
+                logger.debug(f"[INJ]   Pattern override: {breakdown.get('pattern', 0):.1f}")
             return score
 
     # ── PRIORITY 2: HARD CONSTRAINT from high-confidence detector ──
@@ -440,7 +514,7 @@ def _calculate_context_aware_score(
 
     if DEBUG_MODE:
         parts = " + ".join(f"{k}={v:.1f}" for k, v in breakdown.items())
-        print(f"[INJ]   {method}: {parts} = {score:.1f}")
+        logger.debug(f"[INJ]   {method}: {parts} = {score:.1f}")
 
     return score
 
@@ -640,7 +714,7 @@ def _insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
         tried_scales.append(s)
 
         if not _rect_overlaps_text(page, img_rect):
-            print(f"[INJ]   zone={zone_w:.0f}x{zone_h:.0f}pt → img={fw:.0f}x{fh:.0f}pt scale={s:.2f}")
+            logger.debug(f"[INJ]   zone={zone_w:.0f}x{zone_h:.0f}pt → img={fw:.0f}x{fh:.0f}pt scale={s:.2f}")
             page.insert_image(img_rect, stream=sig_bytes)
             inserted = True
             break
@@ -654,7 +728,7 @@ def _insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
         fh = ih * s
         cx = rect.x0 + (zone_w - fw) / 2
         cy = max(rect.y0, rect.y1 - fh)
-        print(f"[INJ]   fallback insert (overlap) scale={s:.2f}, tried={tried_scales}")
+        logger.debug(f"[INJ]   fallback insert (overlap) scale={s:.2f}, tried={tried_scales}")
         page.insert_image(fitz.Rect(cx, cy, cx + fw, cy + fh), stream=sig_bytes)
 
 
