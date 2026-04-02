@@ -13,6 +13,7 @@
 
 import os
 import re
+import difflib
 from docx import Document
 from docx.oxml.ns import qn
 from core.config import (
@@ -211,11 +212,15 @@ def _partial_match(keyword: str, cell_text: str):
     """
     kw_words   = keyword.lower().split()
     cell_lower = cell_text.lower()
+    cell_words = cell_lower.split()
 
     if not kw_words:
         return None
 
-    matched = [w for w in kw_words if w in cell_lower]
+    matched = [
+        w for w in kw_words 
+        if w in cell_lower or any(difflib.SequenceMatcher(None, w, cw).ratio() > 0.8 for cw in cell_words)
+    ]
     ratio   = len(matched) / len(kw_words)
 
     if ratio < PARTIAL_MIN_RATIO:

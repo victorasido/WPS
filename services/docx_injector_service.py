@@ -112,15 +112,15 @@ def _inject_in_paragraph(paragraph, patterns: list, sign_path: str, width: float
     if not matched_pattern:
         return False
     
-    # Clear paragraph runs
-    for run in paragraph.runs:
-        run.text = ""
+    # Keep the text, but remove the placeholder string (e.g. {{SIGN}})
+    clean_text = re.sub(matched_pattern, "", full_text, flags=re.IGNORECASE).strip()
     
-    # Add image to first run (or create new run if no runs exist)
-    if len(paragraph.runs) == 0:
-        run = paragraph.add_run()
-    else:
-        run = paragraph.runs[0]
+    # We will reset the paragraph text entirely. This loses internal character formatting
+    # (bold, italic on specific words) but preserves paragraph-level styles and text.
+    paragraph.text = clean_text
+    
+    # Append the image as a new run
+    run = paragraph.add_run()
     
     try:
         run.add_picture(sign_path, width=Inches(width))

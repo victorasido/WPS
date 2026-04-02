@@ -4,6 +4,7 @@
 from __future__ import annotations
 from typing import List, Optional, TypeVar, Callable
 import fitz
+import difflib
 
 T = TypeVar("T")
 
@@ -101,5 +102,15 @@ def find_keyword_lines(lines: list, keyword: str) -> list:
             results.append(line)
         elif kw_words and len(kw_words) >= 2 and all(w in text_lower for w in kw_words):
             results.append(line)
+        elif kw_words:
+            # Fuzzy match: try to match every keyword word against line words
+            line_words = text_lower.split()
+            if line_words:
+                match_count = sum(
+                    1 for w in kw_words
+                    if any(difflib.SequenceMatcher(None, w, lw).ratio() > 0.8 for lw in line_words)
+                )
+                if match_count == len(kw_words):
+                    results.append(line)
 
     return results
