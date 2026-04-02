@@ -225,6 +225,10 @@ def _match_cascade(keyword: str, cell_text: str):
     if not keyword or not cell_text.strip():
         return None
 
+    # Semantic Validation: pastikan teks bukan label/key-value
+    if not _DEFAULT_VALIDATOR.is_valid(cell_text):
+        return None
+
     # Tier 1: exact (case-sensitive)
     if keyword in cell_text:
         return best_matching_line(keyword, cell_text), CONF_EXACT

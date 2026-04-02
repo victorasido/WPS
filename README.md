@@ -1,106 +1,82 @@
-# Word Signer
+# 🤖 Word Signer: Telegram Bot Edition
 
-Aplikasi desktop untuk **menyisipkan tanda tangan** ke dokumen Word (`.docx`) dan mengekspornya sebagai **PDF** secara otomatis.
+**Word Signer** adalah Telegram Bot canggih yang dirancang untuk menyisipkan tanda tangan ke dokumen Word (`.docx`) dan mengekspornya sebagai **PDF** secara otomatis dengan presisi tinggi.
+
+Proyek ini telah direfaktor sepenuhnya dari aplikasi desktop menjadi bot *headless* dengan arsitektur modern yang bersih (*Clean Architecture*).
 
 ---
 
-## 🚀 Quick Start
+## ✨ Fitur Utama
+
+- **Smart PDF Placement**: Algoritma cerdas yang memahami tata letak PDF (tabel, kolom, garis) untuk menempatkan TTD tanpa menabrak teks.
+- **Auto-Crop TTD**: Secara otomatis menghapus latar belakang putih dan memotong spasi kosong pada gambar tanda tangan untuk hasil yang rapi.
+- **Semantic Validation**: Menghindari kesalahan deteksi pada label formal (seperti "Dibuat oleh:") menggunakan validasi semantik.
+- **Dual Injection Mode**: 
+    - *Template Mode*: Mengganti placeholder gambar langsung di DOCX.
+    - *Geometry Mode*: Penempatan spasial langsung di PDF (fallback cerdas).
+- **History Audit**: Pencatatan riwayat transaksi melalui repositori log yang terisolasi.
+
+---
+
+## 🚀 Persiapan & Instalasi
 
 ### 1. Prasyarat
-- Python 3.10+
-- [LibreOffice](https://www.libreoffice.org/download/) (untuk konversi PDF) — install ke lokasi default
+- **Python 3.10+**
+- **LibreOffice**: Diperlukan untuk konversi Word ke PDF yang akurat. Pastikan `soffice` ada di PATH atau lokasi default.
 
-### 2. Buat Virtual Environment
+### 2. Instalasi
 ```powershell
+# Clone repositori dan masuk ke folder
+cd W-P-S
+
+# Buat dan aktifkan virtual environment
 python -m venv venv
-```
+.\venv\Scripts\activate
 
-### 3. Aktifkan venv
-```powershell
-# Windows
-venv\Scripts\activate
-```
-
-### 4. Install Dependencies
-```powershell
+# Install dependensi
 pip install -r requirements.txt
 ```
 
-> **Catatan:** `cairosvg` butuh [GTK Runtime](https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer/releases) di Windows untuk support SVG. Kalau tidak pakai SVG, bisa skip.
+### 3. Konfigurasi Bot
+Buat file bernama `.env` di root direktori dan masukkan Token Bot Telegram Anda:
+```env
+BOT_TOKEN=your_telegram_bot_token_here
+```
 
-### 5. Jalankan Aplikasi
+---
+
+## 🛠️ Cara Menjalankan
+
+Jalankan bot dengan perintah:
 ```powershell
-python main.py
-# atau tanpa aktifkan venv:
-venv\Scripts\python.exe 
-main.py
+python bot.py
 ```
 
----
-
-## 📂 Struktur Proyek
-
-```
-W-P-S/
-├── main.py                   # Entry point (GUI)
-├── requirements.txt
-├── core/
-│   └── config.py             # Konfigurasi global
-└── services/
-    ├── detector_service.py   # Deteksi zona TTD di paragraf & tabel
-    ├── injector_service.py   # Sisipkan gambar TTD ke DOCX
-    ├── converter_service.py  # Konversi DOCX → PDF
-    ├── preset_service.py     # Simpan/load preset & settings
-    └── logger_service.py     # Log riwayat operasi
-```
+**Cara Menggunakan di Telegram:**
+1. Kirim file dokumen **.docx** ke Bot.
+2. Kirim gambar **tanda tangan** (PNG/JPG). Nama file gambar akan digunakan sebagai keyword pencarian di dokumen (contoh: `Farino Joshua.png`).
+3. Bot akan memproses dan mengirimkan kembali file **PDF** yang sudah ditandatangani.
 
 ---
 
-## 🖥️ Cara Pakai
+## 📂 Struktur Proyek (Clean Architecture)
 
-1. **Pilih Dokumen Word** — bisa pilih satu atau **banyak file** sekaligus (batch)
-2. **Pilih Tanda Tangan** — format PNG, JPG, JPEG, atau SVG *(disimpan otomatis sebagai preset)*
-3. Klik **"Buat PDF"**
-4. **Pilih zona** yang akan di-TTD dari dialog preview (bisa uncheck yang tidak perlu)
-5. PDF tersimpan di folder yang sama dengan nama `namafile_signed.pdf`
-
----
-
-## ✨ Fitur
-
-| Fitur | Keterangan |
-|---|---|
-| 🌙 Dark Mode | Toggle kanan atas — preferensi tersimpan otomatis |
-| ⚙️ Settings | Atur confidence threshold, lebar TTD, dan auto-open PDF |
-| ✅ Zone Preview | Preview zona sebelum proses + pilih manual mana yang di-TTD |
-| 📂 Batch Mode | Proses banyak `.docx` sekaligus dengan 1 tanda tangan |
-| ★ Preset TTD | TTD terakhir otomatis terisi saat buka app kembali |
-| 📋 Deteksi Tabel | Zona TTD di dalam tabel Word ikut terdeteksi |
-| 🔄 Fallback PDF | Jika LibreOffice gagal, otomatis coba `docx2pdf` |
-| 🗒️ History Log | Riwayat tersimpan di `%APPDATA%\WordSigner\history.log` |
+- `bot.py`: Entry point dan controller alur Telegram.
+- `services/`: Logika bisnis utama (Deteksi, Injeksi, Konversi).
+- `repositories/`: Layer infrastruktur untuk I/O (Logs, Settings).
+- `utils/`: Pembantu independen (Image Processing, PDF Utils, Config).
+- `services/pdf_placer/`: Modul canggih untuk analisis spasial layout PDF.
 
 ---
 
-## ⚙️ Konfigurasi Default
+## ⚙️ Teknologi yang Digunakan
 
-Edit `core/config.py` atau gunakan panel Settings di aplikasi:
-
-| Setting | Default |
-|---|---|
-| Confidence Threshold | `0.4` |
-| Lebar TTD | `1.5` inci |
-| Auto-buka PDF | `True` |
-
-Data settings disimpan di `%APPDATA%\WordSigner\settings.json`.
+- [python-telegram-bot](https://python-telegram-bot.org/): Framework Bot Telegram.
+- [PyMuPDF (fitz)](https://pymupdf.readthedocs.io/): Manipulasi dan analisis geometri PDF.
+- [python-docx](https://python-docx.readthedocs.io/): Manipulasi dokumen Word.
+- [Pillow](https://python-pillow.org/): Pengolahan gambar tanda tangan.
 
 ---
 
-## 📦 Dependencies
-
-| Package | Fungsi |
-|---|---|
-| `python-docx` | Baca & edit file DOCX |
-| `Pillow` | Konversi gambar JPG → PNG |
-| `cairosvg` | Konversi SVG → PNG |
-| `pymupdf` | Utility PDF |
-| `docx2pdf` | Fallback converter PDF |
+## ⚖️ Lisensi
+Proyek ini dikembangkan untuk kebutuhan internal dan otomatisasi alur kerja dokumen secara cerdas.

@@ -3,7 +3,7 @@ import re
 import logging
 import fitz
 from PIL import Image
-from utils.image_utils import remove_image_background
+from utils.image_utils import SignatureImageProcessor
 from utils.pdf_utils import rect_overlaps_text
 
 logger = logging.getLogger(__name__)
@@ -679,16 +679,14 @@ def _find_dash_below(lines: list, name_idx: int, name_line: dict):
 def _insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
     """
     Sisipkan TTD ke dalam rect.
+    - Menggunakan SignatureImageProcessor untuk hapus background & auto-crop.
     - Scale proporsional, fit ke 85% zona (tidak melebihi batas)
     - Cap upscale 2x agar TTD tidak blur
     - Bottom-aligned, center horizontal
     - Guard: cy tidak boleh kurang dari rect.y0
     """
-    img    = Image.open(io.BytesIO(sig_bytes)).convert("RGBA")
-    iw, ih = img.size
-
-    # Hapus background putih/terang agar TTD transparan di PDF
-    sig_bytes = remove_image_background(img)
+    processor = SignatureImageProcessor()
+    sig_bytes, iw, ih = processor.process(sig_bytes)
 
     zone_w = rect.width
     zone_h = rect.height

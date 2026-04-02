@@ -11,7 +11,7 @@ import fitz
 from .utils.geometry import cluster_by_x
 
 # A text line that looks like "--------" or "________"
-_DASH_RE = re.compile(r"^[-_\s]{4,}$")
+_DASH_RE = re.compile(r"^[-_.\s]{4,}$")
 
 # Minimum line width as fraction of page width to count as a separator
 _HLINE_MIN_WIDTH_RATIO = 0.08
