@@ -6,7 +6,7 @@ import io
 import os
 import subprocess
 import tempfile
-from core.config import LIBREOFFICE_PATH
+from utils.config import LIBREOFFICE_PATH
 
 
 def convert_to_pdf(signed_docx_bytes: bytes) -> bytes:

@@ -14,15 +14,46 @@
 import os
 import re
 import difflib
+from typing import Protocol, runtime_checkable
 from docx import Document
 from docx.oxml.ns import qn
 from utils.text_utils import extract_keyword, best_matching_line, is_dash_line
-from core.config import (
+from utils.config import (
     CONFIDENCE_THRESHOLD,
     LAST_PAGES_SCAN,
     IGNORED_LINES,
     DASH_LINE_MIN,
 )
+
+# ── Semantic Validation (Protocol / Duck Typing) ────────────────
+
+@runtime_checkable
+class SemanticValidator(Protocol):
+    """Duck Typing Protocol: setiap kelas yang memiliki is_valid() bisa dipakai."""
+    def is_valid(self, text: str) -> bool: ...
+
+
+class DefaultSemanticValidator:
+    """
+    Implementasi default SemanticValidator.
+    Menolak teks yang merupakan label key-value (bukan area TTD).
+    Contoh yang ditolak: "Dibuat oleh:", "Disetujui: Ya", "by: Farino"
+    """
+    _REJECT_PATTERNS = [
+        re.compile(r":\s*$"),          # diakhiri titik dua → label field
+        re.compile(r"by\s*:", re.I),   # "by:" → indikasi log/metadata
+        re.compile(r"\w+\s*:\s*\S"),    # "Key: Value" → key-value pair
+    ]
+
+    def is_valid(self, text: str) -> bool:
+        clean = text.strip()
+        if not clean:
+            return False
+        return not any(p.search(clean) for p in self._REJECT_PATTERNS)
+
+
+# Singleton validator default — bisa di-override saat testing
+_DEFAULT_VALIDATOR: SemanticValidator = DefaultSemanticValidator()
 
 # ── Confidence weights ────────────────────────────────────────
 CONF_EXACT        = 1.0
@@ -331,4 +362,4 @@ def _blank_below_in_paras(paras: list):
     has_dash = any(is_dash_line(_para_text(paras[i])) for i in remaining)
     return blank_after[0], has_dash
 
-
+

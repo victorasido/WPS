@@ -1,6 +1,6 @@
 import os
 import re
-from core.config import DASH_LINE_MIN
+from .config import DASH_LINE_MIN
 
 def extract_keyword(signature_path: str) -> str:
     """
