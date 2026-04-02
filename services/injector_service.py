@@ -3,6 +3,8 @@ import re
 import logging
 import fitz
 from PIL import Image
+from utils.image_utils import remove_image_background
+from utils.pdf_utils import rect_overlaps_text
 
 logger = logging.getLogger(__name__)
 
@@ -686,7 +688,7 @@ def _insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
     iw, ih = img.size
 
     # Hapus background putih/terang agar TTD transparan di PDF
-    sig_bytes = _remove_background(img)
+    sig_bytes = remove_image_background(img)
 
     zone_w = rect.width
     zone_h = rect.height
@@ -713,7 +715,7 @@ def _insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
         img_rect = fitz.Rect(cx, cy, cx + fw, cy + fh)
         tried_scales.append(s)
 
-        if not _rect_overlaps_text(page, img_rect):
+        if not rect_overlaps_text(page, img_rect):
             logger.debug(f"[INJ]   zone={zone_w:.0f}x{zone_h:.0f}pt → img={fw:.0f}x{fh:.0f}pt scale={s:.2f}")
             page.insert_image(img_rect, stream=sig_bytes)
             inserted = True
@@ -732,56 +734,7 @@ def _insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
         page.insert_image(fitz.Rect(cx, cy, cx + fw, cy + fh), stream=sig_bytes)
 
 
-# ── Background removal ────────────────────────────────────────
 
-def _remove_background(img: Image.Image) -> bytes:
-    """
-    Hapus background putih/terang dari gambar TTD.
-    Pixel dengan brightness > 240 (hampir putih) → transparan.
-    Hasilnya TTD terlihat bersih di atas PDF tanpa kotak putih.
-    """
-    img  = img.convert("RGBA")
-    data = img.getdata()
-
-    new_data = []
-    for r, g, b, a in data:
-        # Pixel terang (putih/near-white) → transparan
-        if r > 240 and g > 240 and b > 240:
-            new_data.append((255, 255, 255, 0))
-        else:
-            new_data.append((r, g, b, a))
-
-    img.putdata(new_data)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _rect_overlaps_text(page, rect: fitz.Rect) -> bool:
-    """
-    Check whether a given rect overlaps with any non-empty text span on the page.
-    Returns True if overlap detected, False otherwise.
-    """
-    try:
-        data = page.get_text("dict")
-    except Exception:
-        return False
-
-    for block in data.get("blocks", []):
-        if block.get("type") != 0:
-            continue
-        for line in block.get("lines", []):
-            for span in line.get("spans", []):
-                text = span.get("text", "").strip()
-                if not text:
-                    continue
-                bbox = span.get("bbox")
-                if not bbox or len(bbox) < 4:
-                    continue
-                span_rect = fitz.Rect(bbox)
-                if rect.intersects(span_rect):
-                    return True
-    return False
 
 
 # ── Utilities ─────────────────────────────────────────────────

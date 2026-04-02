@@ -31,9 +31,10 @@ from services.detector_service import detect_signature_zones
 from services.converter_service import convert_to_pdf
 from services.injector_service import inject_signature
 from services.docx_injector_service import inject_signature_to_docx, PlaceholderNotFoundError
-from services.logger_service import log_success, log_error
+from repositories import LogRepository
 
 load_dotenv()
+log_repo = LogRepository()
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
@@ -512,12 +513,12 @@ async def _process_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE, stat
             pass
 
         n_zones = 1 if is_template else len(selected_zones)
-        log_success(docx_name, "telegram_output", n_zones)
+        log_repo.log_success(docx_name, "telegram_output", n_zones)
         success = True
 
     except Exception as e:
         logger.exception("Error saat proses dokumen")
-        log_error(docx_name, str(e))
+        log_repo.log_error(docx_name, str(e))
         try:
             await status_msg.edit_text(
                 f"❌ *Gagal memproses dokumen:*\n`{e}`\n\n"

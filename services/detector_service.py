@@ -16,6 +16,7 @@ import re
 import difflib
 from docx import Document
 from docx.oxml.ns import qn
+from utils.text_utils import extract_keyword, best_matching_line, is_dash_line
 from core.config import (
     CONFIDENCE_THRESHOLD,
     LAST_PAGES_SCAN,
@@ -60,7 +61,7 @@ def detect_signature_zones(
     if last_pages is None:
         last_pages = LAST_PAGES_SCAN
 
-    keyword = _extract_keyword(signature_path)
+    keyword = extract_keyword(signature_path)
     doc     = Document(docx_path)
     zones   = []
 
@@ -180,7 +181,7 @@ def _is_tc_blank(tc) -> bool:
 
 
 def _has_dash_in_tc(tc) -> bool:
-    return any(_is_dash_line(_para_text(p)) for p in _tc_paragraphs(tc))
+    return any(is_dash_line(_para_text(p)) for p in _tc_paragraphs(tc))
 
 
 # ── Phase 1: Match cascade ────────────────────────────────────
@@ -195,11 +196,11 @@ def _match_cascade(keyword: str, cell_text: str):
 
     # Tier 1: exact (case-sensitive)
     if keyword in cell_text:
-        return _best_matching_line(keyword, cell_text), CONF_EXACT
+        return best_matching_line(keyword, cell_text), CONF_EXACT
 
     # Tier 2: case-insensitive full phrase
     if keyword.lower() in cell_text.lower():
-        return _best_matching_line(keyword, cell_text), CONF_ICASE
+        return best_matching_line(keyword, cell_text), CONF_ICASE
 
     # Tier 3: partial per kata
     return _partial_match(keyword, cell_text)
@@ -227,7 +228,7 @@ def _partial_match(keyword: str, cell_text: str):
         return None
 
     confidence = CONF_PARTIAL_BASE + ratio * (CONF_ICASE - CONF_PARTIAL_BASE)
-    return _best_matching_line(keyword, cell_text), round(confidence, 3)
+    return best_matching_line(keyword, cell_text), round(confidence, 3)
 
 
 # ── Phase 2: Slot validation (XML-based) ─────────────────────
@@ -301,7 +302,7 @@ def _blank_above_in_paras(paras: list):
         return None
 
     has_dash = any(
-        _is_dash_line(_para_text(paras[i]))
+        is_dash_line(_para_text(paras[i]))
         for i in range(first_text_idx)
     )
     return first_text_idx - 1, has_dash
@@ -327,100 +328,7 @@ def _blank_below_in_paras(paras: list):
     if not blank_after:
         return None
 
-    has_dash = any(_is_dash_line(_para_text(paras[i])) for i in remaining)
+    has_dash = any(is_dash_line(_para_text(paras[i])) for i in remaining)
     return blank_after[0], has_dash
 
-
-# ── Text helpers ──────────────────────────────────────────────
-
-def _extract_keyword(signature_path: str) -> str:
-    """
-    Ekstrak keyword dari nama file TTD.
-
-    Handle konvensi penamaan yang umum:
-        "Farino.png"               → "Farino"
-        "Farino_Joshua.png"        → "Farino Joshua"
-        "TTD_-_Farino_Joshua.png"  → "Farino Joshua"
-        "TTD_Farino_Joshua.png"    → "Farino Joshua"
-        "sign_Manager_IT.png"      → "Manager IT"
-        "Division Head Divisi.png" → "Division Head Divisi"
-
-    Steps:
-        1. Strip ekstensi
-        2. Strip prefix TTD/sign/tanda_tangan (case-insensitive)
-        3. Ganti underscore → space
-        4. Clean separator " - " → space
-        5. Normalize whitespace
-    """
-    _PREFIXES = [
-        "TTD_-_", "TTD_", "TTD-", "TTD ",
-        "ttd_-_", "ttd_", "ttd-", "ttd ",
-        "sign_", "sign-",
-        "tanda_tangan_", "tanda-tangan-",
-    ]
-
-    basename = os.path.basename(signature_path)
-    name, _  = os.path.splitext(basename)
-    name     = name.strip()
-
-    # Strip prefix (case-insensitive)
-    lower = name.lower()
-    for prefix in _PREFIXES:
-        if lower.startswith(prefix.lower()):
-            name  = name[len(prefix):]
-            break
-
-    # Underscore → space
-    name = name.replace("_", " ")
-
-    # " - " atau standalone "-" antara kata → space
-    # (preserve dash di tengah kata: "Al-Farisi" tetap utuh)
-    name = re.sub(r'\s*-\s*', ' ', name)
-
-    return " ".join(name.split())
-
-
-def _best_matching_line(keyword: str, cell_text: str) -> str:
-    """
-    Ekstrak baris paling relevan dari cell_text terhadap keyword.
-
-    Cell bisa mengandung banyak baris — misalnya:
-        "Developer\nFarino Joshua\nPT. Bank Negara Indonesia"
-
-    Fungsi ini return baris yang mengandung keyword, bukan full cell text.
-    Fallback ke baris pertama non-kosong jika tidak ada baris yang match.
-
-    Contoh:
-        keyword="Farino", cell="Farino Joshua"         → "Farino Joshua"
-        keyword="Division Head", cell="Division Head\nDivisi IT\nPT. BNI"
-                                                        → "Division Head"
-        keyword="Manager", cell="Approval\nManager Keuangan\nPT. BNI"
-                                                        → "Manager Keuangan"
-    """
-    lines = [l.strip() for l in cell_text.splitlines() if l.strip()]
-    if not lines:
-        return keyword
-
-    kw_lower = keyword.lower()
-
-    # Prioritas 1: baris yang mengandung keyword persis (case-insensitive)
-    for line in lines:
-        if kw_lower in line.lower():
-            return line
-
-    # Prioritas 2: baris yang mengandung kata terbanyak dari keyword
-    kw_words = kw_lower.split()
-    best_line  = lines[0]
-    best_score = 0
-    for line in lines:
-        score = sum(1 for w in kw_words if w in line.lower())
-        if score > best_score:
-            best_score = score
-            best_line  = line
-
-    return best_line
-
-
-def _is_dash_line(text: str) -> bool:
-    stripped = text.strip().replace(" ", "")
-    return len(stripped) >= DASH_LINE_MIN and all(c in "-_" for c in stripped)
+
