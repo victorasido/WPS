@@ -5,6 +5,7 @@ import fitz
 from PIL import Image
 from utils.image_utils import SignatureImageProcessor
 from utils.pdf_utils import rect_overlaps_text
+from utils.text_utils import classify_label
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ def _find_signature_rect(doc, name: str, zone: dict = None):
     candidates = []
 
     # Semantic classification
-    label = _classify_label(name)
+    label = classify_label(name)
     preferred = zone.get("inject_position")
     logger.debug(f"[INJ] Classification: {name} → {label}, preferred: {preferred}")
 
@@ -300,39 +301,7 @@ def _detect_layout_pattern(lines: list, keyword_idx: int, keyword_line: dict):
     return None
 
 
-# ── Classification & Scoring ─────────────────────────────────
-
-def _classify_label(text: str) -> str:
-    """
-    Klasifikasi semantic dari text: apakah nama, role, atau unknown.
-    
-    Heuristic:
-    - ROLE: mengandung keyword seperti manager, head, supervisor, etc.
-    - NAME: 2-4 kata dengan huruf besar
-    - UNKNOWN: tidak clear
-    """
-    text_lower = text.lower()
-    
-    ROLE_HINTS = [
-        "manager", "head", "supervisor", "lead",
-        "director", "approval", "approver", "chief",
-        "officer", "coordinator", "admin", "staff",
-        "division", "department", "unit", "section",
-    ]
-    
-    # Check role hints
-    if any(hint in text_lower for hint in ROLE_HINTS):
-        return "role"
-    
-    # Check if looks like name: 2-4 words, mostly capitalized
-    words = text.split()
-    if 2 <= len(words) <= 4:
-        # Count capitalized words
-        capitalized = sum(1 for w in words if w and w[0].isupper())
-        if capitalized >= len(words) - 1:  # mostly capitalized
-            return "name"
-    
-    return "unknown"
+# ── Scoring Helpers ──────────────────────────────────────────
 
 
 def _space_score(rect: fitz.Rect) -> float:
@@ -554,6 +523,19 @@ def _find_all_name_lines(lines: list, target_words: list) -> list:
 
 # ── Slot detection ────────────────────────────────────────────
 
+def _expand_width_if_narrow(col_x0: float, col_x1: float, min_width: float = 200.0) -> tuple[float, float]:
+    """
+    Symmetrically expand width from center if too narrow to ensure
+    there's enough space to properly center the signature horizontally.
+    """
+    w = col_x1 - col_x0
+    if w < min_width:
+        cx = (col_x0 + col_x1) / 2
+        col_x0 = max(0, cx - (min_width / 2))
+        col_x1 = col_x0 + min_width
+    return col_x0, col_x1
+
+
 def _find_slot_above(lines: list, name_idx: int, name_line: dict):
     """
     Cari blank space di atas nama dalam kolom yang sama.
@@ -585,6 +567,8 @@ def _find_slot_above(lines: list, name_idx: int, name_line: dict):
     if gap < MIN_GAP_WHITESPACE:
         return None
 
+    col_x0, col_x1 = _expand_width_if_narrow(col_x0, col_x1)
+
     rect = fitz.Rect(
         col_x0,
         nearest["yb"] + SIGNATURE_PADDING,
@@ -606,6 +590,7 @@ def _find_dash_above(lines: list, name_idx: int, name_line: dict):
             continue
         txt = line["text"].replace(" ", "")
         if len(txt) >= 4 and all(c in "-_" for c in txt):
+            col_x0, col_x1 = _expand_width_if_narrow(col_x0, col_x1)
             rect = fitz.Rect(
                 col_x0,
                 line["yt"] - 80,
@@ -642,6 +627,8 @@ def _find_slot_below(lines: list, name_idx: int, name_line: dict):
     if gap < MIN_GAP_WHITESPACE:
         return None
 
+    col_x0, col_x1 = _expand_width_if_narrow(col_x0, col_x1)
+
     rect = fitz.Rect(
         col_x0,
         name_line["yb"] + SIGNATURE_PADDING,
@@ -663,6 +650,7 @@ def _find_dash_below(lines: list, name_idx: int, name_line: dict):
             continue
         txt = line["text"].replace(" ", "")
         if len(txt) >= 4 and all(c in "-_" for c in txt):
+            col_x0, col_x1 = _expand_width_if_narrow(col_x0, col_x1)
             rect = fitz.Rect(
                 col_x0,
                 line["yb"] + SIGNATURE_PADDING,

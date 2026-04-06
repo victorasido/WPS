@@ -17,7 +17,7 @@ import difflib
 from typing import Protocol, runtime_checkable
 from docx import Document
 from docx.oxml.ns import qn
-from utils.text_utils import extract_keyword, best_matching_line, is_dash_line
+from utils.text_utils import extract_keyword, best_matching_line, is_dash_line, classify_label
 from utils.config import (
     CONFIDENCE_THRESHOLD,
     LAST_PAGES_SCAN,
@@ -243,27 +243,51 @@ def _match_cascade(keyword: str, cell_text: str):
 
 def _partial_match(keyword: str, cell_text: str):
     """
-    Min 60% kata dari keyword harus ada di cell_text.
-    Confidence range: ~0.5 (60%) hingga ~0.85 (99%).
+    Bulletproof 3-Layer Architecture for partial matching:
+    1. Exact Token Boundaries: Prevent substring matching ("it" in "auditor").
+    2. Strict Role Threshold: If role, require 1.0 (100% matched tokens).
+    3. Negative Penalty: Deduct confidence for garbage words.
     """
-    kw_words   = keyword.lower().split()
+    kw_words = [w for w in re.split(r'\W+', keyword.lower()) if w]
     cell_lower = cell_text.lower()
-    cell_words = cell_lower.split()
+    cell_words = [w for w in re.split(r'\W+', cell_lower) if w]
 
-    if not kw_words:
+    if not kw_words or not cell_words:
         return None
 
-    matched = [
-        w for w in kw_words 
-        if w in cell_lower or any(difflib.SequenceMatcher(None, w, cw).ratio() > 0.8 for cw in cell_words)
-    ]
-    ratio   = len(matched) / len(kw_words)
+    # Layer 1: Strict Token Matching (via exact string eq or difflib)
+    matched = []
+    for w in kw_words:
+        # Check if `w` is perfectly tokenized inside cell_words
+        if w in cell_words:
+            matched.append(w)
+        else:
+            # allow slight typo handling (e.g. 1 char diff for long words)
+            for cw in cell_words:
+                if len(cw) >= 4 and difflib.SequenceMatcher(None, w, cw).ratio() > 0.85:
+                    matched.append(w)
+                    break
 
-    if ratio < PARTIAL_MIN_RATIO:
+    # Layer 2: Strict Role vs Name Threshold
+    label = classify_label(keyword)
+    threshold = 1.0 if label == "role" else PARTIAL_MIN_RATIO
+
+    ratio = len(matched) / len(kw_words)
+    if ratio < threshold:
         return None
 
-    confidence = CONF_PARTIAL_BASE + ratio * (CONF_ICASE - CONF_PARTIAL_BASE)
-    return best_matching_line(keyword, cell_text), round(confidence, 3)
+    # Layer 3: Negative Penalty Tie-Breaker
+    extra_words = len(cell_words) - len(matched)
+    penalty = max(0, extra_words * 0.05)
+
+    base_conf = CONF_PARTIAL_BASE + ratio * (CONF_ICASE - CONF_PARTIAL_BASE)
+    final_confidence = max(0, base_conf - penalty)
+
+    # Only return if confidence is at least base or strictly verified
+    if final_confidence < CONF_PARTIAL_BASE and ratio < 1.0:
+        return None
+
+    return best_matching_line(keyword, cell_text), round(final_confidence, 3)
 
 
 # ── Phase 2: Slot validation (XML-based) ─────────────────────

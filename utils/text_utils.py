@@ -93,3 +93,36 @@ def best_matching_line(keyword: str, cell_text: str) -> str:
 def is_dash_line(text: str) -> bool:
     stripped = text.strip().replace(" ", "")
     return len(stripped) >= DASH_LINE_MIN and all(c in "-_" for c in stripped)
+
+
+def classify_label(text: str) -> str:
+    """
+    Klasifikasi semantic dari text: apakah nama, role, atau unknown.
+    
+    Heuristic:
+    - ROLE: mengandung keyword seperti manager, head, supervisor, etc.
+    - NAME: 2-4 kata dengan huruf besar
+    - UNKNOWN: tidak clear
+    """
+    text_lower = text.lower()
+    
+    ROLE_HINTS = [
+        "manager", "head", "supervisor", "lead",
+        "director", "approval", "approver", "chief",
+        "officer", "coordinator", "admin", "staff",
+        "division", "department", "unit", "section",
+    ]
+    
+    # Check role hints
+    if any(hint in text_lower for hint in ROLE_HINTS):
+        return "role"
+    
+    # Check if looks like name: 2-4 words, mostly capitalized
+    words = text.split()
+    if 2 <= len(words) <= 4:
+        # Count capitalized words
+        capitalized = sum(1 for w in words if w and w[0].isupper())
+        if capitalized >= len(words) - 1:  # mostly capitalized
+            return "name"
+    
+    return "unknown"
