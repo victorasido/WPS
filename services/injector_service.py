@@ -679,8 +679,15 @@ def _insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
     zone_w = rect.width
     zone_h = rect.height
 
-    # Initial scale (fit to 85% of zone, cap upscale)
-    max_scale = min((zone_w * 0.85) / iw, (zone_h * 0.85) / ih, 2.0)
+    # Absolute max constraint (to prevent giant signatures in wide slots)
+    MAX_ABS_WIDTH = 160.0
+    MAX_ABS_HEIGHT = 80.0
+
+    target_w = min(zone_w * 0.85, MAX_ABS_WIDTH)
+    target_h = min(zone_h * 0.85, MAX_ABS_HEIGHT)
+
+    # Initial scale (fit to target size, cap upscale, maintain aspect ratio)
+    max_scale = min(target_w / iw, target_h / ih, 2.0)
     min_scale = 0.4
     step = 0.1
 
