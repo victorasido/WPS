@@ -3,7 +3,11 @@ import os
 
 class SettingsRepository:
     def __init__(self):
-        self.app_dir = os.path.join(os.getenv("APPDATA", os.path.expanduser("~")), "WordSigner")
+        data_dir = os.getenv("DATA_DIR")
+        if data_dir:
+            self.app_dir = data_dir
+        else:
+            self.app_dir = os.path.join(os.getenv("APPDATA", os.path.expanduser("~")), "WordSigner")
         self.default_settings = {
             "confidence_threshold": 0.4,
             "signature_width_inches": 1.5,

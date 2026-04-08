@@ -1,0 +1,34 @@
+[06 Apr 2026, 07:49]  ✗ GAGAL
+                    Dokumen  : unit-test-qris-nfc-tap-payment-debit-offus.docx
+                    Penyebab : LibreOffice tidak dapat mengkonversi dokumen. Pastikan LibreOffice terinstall.
+
+[06 Apr 2026, 07:52]  ✓ BERHASIL
+                    Dokumen  : unit-test-qris-nfc-tap-payment-debit-offus.docx
+                    Output   : telegram_output
+                    TTD      : 1 zona ditandatangani
+
+[06 Apr 2026, 08:17]  ✓ BERHASIL
+                    Dokumen  : unit-test-qris-nfc-tap-payment-debit-offus.docx
+                    Output   : telegram_output
+                    TTD      : 1 zona ditandatangani
+
+[06 Apr 2026, 08:19]  ✓ BERHASIL
+                    Dokumen  : unit-test-qris-nfc-tap-payment-debit-offus.docx
+                    Output   : telegram_output
+                    TTD      : 1 zona ditandatangani
+
+[06 Apr 2026, 09:55]  ✓ BERHASIL
+                    Dokumen  : unit-test-qris-nfc-tap-payment-debit-offus.docx
+                    Output   : telegram_output
+                    TTD      : 1 zona ditandatangani
+
+[06 Apr 2026, 10:04]  ✓ BERHASIL
+                    Dokumen  : unit-test-qris-nfc-tap-payment-debit-offus_signed (26).pdf
+                    Output   : telegram_pdf_bypass
+                    TTD      : 1 zona ditandatangani
+
+[06 Apr 2026, 10:08]  ✓ BERHASIL
+                    Dokumen  : unit_test_qris_nfc_tap_payment_debit_offus_signed_26_signed.pdf
+                    Output   : telegram_pdf_bypass
+                    TTD      : 1 zona ditandatangani
+

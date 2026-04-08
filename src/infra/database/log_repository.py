@@ -3,7 +3,12 @@ from datetime import datetime
 
 class LogRepository:
     def __init__(self):
-        self.app_dir = os.path.join(os.getenv("APPDATA", os.path.expanduser("~")), "WordSigner")
+        data_dir = os.getenv("DATA_DIR")
+        if data_dir:
+            self.app_dir = data_dir
+        else:
+            self.app_dir = os.path.join(os.getenv("APPDATA", os.path.expanduser("~")), "WordSigner")
+            
         self.log_file = os.path.join(self.app_dir, "history.log")
         self.max_lines = 500
         

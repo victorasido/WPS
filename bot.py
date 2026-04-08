@@ -5,8 +5,8 @@ import os
 import logging
 from dotenv import load_dotenv
 from telegram.ext import Application
-from handlers.core_handler import setup_core_handlers
-from handlers.document_workflow import setup_workflow_handler
+from src.app.handlers.core_handler import setup_core_handlers
+from src.app.handlers.document_workflow import setup_workflow_handler
 
 load_dotenv()
 

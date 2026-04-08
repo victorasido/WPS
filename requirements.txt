@@ -8,3 +8,9 @@ docx2pdf>=0.1.8
 # ── Telegram Bot ─────────────────────────────────────
 python-telegram-bot>=21.0
 python-dotenv>=1.0.0
+
+# ── Telemetry ────────────────────────────────────────
+opentelemetry-api>=1.24.0
+opentelemetry-sdk>=1.24.0
+opentelemetry-exporter-otlp>=1.24.0
+grpcio>=1.62.1

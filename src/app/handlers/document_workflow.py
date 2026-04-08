@@ -10,13 +10,12 @@ from telegram.constants import ChatAction
 from telegram.ext import (
     CommandHandler, MessageHandler, ConversationHandler, CallbackQueryHandler, ContextTypes, filters
 )
-from services.detector_service import detect_signature_zones
-from services.converter_service import convert_to_pdf
-from services.injector_service import inject_signature
-from services.docx_injector_service import inject_signature_to_docx, PlaceholderNotFoundError
-from repositories import LogRepository
-from repositories.session_repository import session_manager
-from handlers.core_handler import _kb_start, CB_START_SIGN
+from src.core.detector import detect_signature_zones
+from src.core.converter.converter_service import convert_to_pdf
+from src.core.injector import inject_signature
+from src.core.docx_injector.docx_injector_service import inject_signature_to_docx, PlaceholderNotFoundError
+from src.infra.database import LogRepository, session_manager
+from .core_handler import _kb_start, CB_START_SIGN
 
 logger = logging.getLogger(__name__)
 log_repo = LogRepository()
@@ -313,22 +312,29 @@ async def reject_wrong_type_in_sign(update: Update, ctx: ContextTypes.DEFAULT_TY
 async def _after_sign_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     Branch setelah TTD diterima:
-    - PDF  → tanya keyword dulu (WAIT_KEYWORD)
+    - PDF  → auto-extract keyword dari nama file TTD, langsung proses
     - DOCX → langsung proses
     """
     user_id = update.effective_user.id
     session = session_manager._user_sessions[user_id]
     doc_type = session["doc_type"]
-
     if doc_type == "pdf":
-        await update.message.reply_text(
-            "📝 Dokumen kamu adalah *PDF*.\n\n"
-            "Ketik *nama* atau *jabatan* target penanda tangan.\n"
-            "Contoh: `Kepala Divisi IT` atau `Direktur Utama`\n\n"
-            "⚠️ Minimal 3 karakter. Ketik /cancel untuk batal.",
+        # Auto-extract keyword dari nama file TTD (sama seperti DOCX)
+        from src.shared.text_utils import extract_keyword as _extract_kw
+        keyword = _extract_kw(session.get("sign_name", "signature.png"))
+        session["keyword"]   = keyword
+        session["sign_name"] = session.get("sign_name", "signature.png")
+
+        status = await update.message.reply_text(
+            f"📄 Dokumen PDF diterima.\n"
+            f"🔍 Mencari `{keyword}` di seluruh dokumen... mohon tunggu.",
             parse_mode="Markdown",
         )
-        return WAIT_KEYWORD
+        await update.message._bot.send_chat_action(
+            chat_id=update.effective_chat.id,
+            action=ChatAction.UPLOAD_DOCUMENT,
+        )
+        return await _run_pdf_bypass(update, ctx, status)
 
     # DOCX → langsung ke deteksi & zone selection
     return await _run_docx_detect(update, ctx)
@@ -431,7 +437,7 @@ async def _run_docx_detect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "Pastikan nama file TTD mengandung kata yang ada di dokumen.",
                 parse_mode="Markdown",
             )
-            session_manager.clear_session(user_id, None)
+            session_manager.clear_session(user_id)
             return ConversationHandler.END
 
         
@@ -462,7 +468,7 @@ async def _run_docx_detect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"❌ Gagal deteksi zona:\n`{e}`\n\nKetik /sign untuk mencoba lagi.",
             parse_mode="Markdown",
         )
-        session_manager.clear_session(user_id, None)
+        session_manager.clear_session(user_id)
         return ConversationHandler.END
 
 
@@ -518,14 +524,16 @@ async def _run_pdf_bypass(
             )
 
         if signed_pdf is None:
-            # Keyword tidak ditemukan — tawarkan retry keyword
+            # Keyword tidak ditemukan di seluruh dokumen
             await status_msg.edit_text(
-                f"❌ Keyword *`{keyword}`* tidak ditemukan di halaman yang di-scan.\n\n"
-                "Ketik keyword lain untuk dicoba lagi, atau /cancel untuk batal.",
+                f"❌ *Keyword tidak ditemukan di dokumen PDF.*\n\n"
+                f"🔍 Keyword yang dicari: `{keyword}`\n\n"
+                "💡 *Tips:* Pastikan nama file TTD kamu mengandung kata yang ada di PDF.\n"
+                "Contoh: jika nama di PDF `Farino Joshua`, beri nama file TTD `Farino Joshua.png`\n\n"
+                "Ketik /sign untuk coba lagi.",
                 parse_mode="Markdown",
             )
-            # Kembali ke WAIT_KEYWORD agar user bisa coba keyword lain
-            return WAIT_KEYWORD
+            return ConversationHandler.END
 
         # Kirim hasil PDF
         output_name = doc_name.replace(".pdf", "_signed.pdf")
@@ -572,7 +580,7 @@ async def _run_pdf_bypass(
 
     finally:
         session_manager.remove_active_user(user_id)
-        session_manager.clear_session(user_id, None)
+        session_manager.clear_session(user_id)
 
     return ConversationHandler.END
 
@@ -595,7 +603,10 @@ def _sync_pdf_bypass(
     Sync worker untuk PDF bypass (dijalankan di executor).
     Return signed PDF bytes, atau None jika keyword tidak ditemukan.
     """
-    # Buat zone hint yang kompatibel dengan inject_signature
+    # Buat zone hint yang kompatibel dengan inject_signature.
+    # paragraph_index >= 10000 → pdf_placer memetakan ke 2 halaman TERAKHIR.
+    # Ini memastikan tanda tangan dicari di area yang paling umum (akhir dokumen).
+    # Jika tidak ditemukan, inject_signature akan fallback ke legacy whitespace mode.
     zones = [{
         "matched_name":    keyword,
         "keyword":         keyword,
@@ -603,7 +614,7 @@ def _sync_pdf_bypass(
         "inject_position": "above_same",
         "source":          "pdf_bypass",
         "table_location":  None,
-        "paragraph_index": 0,
+        "paragraph_index": 10000,  # → scan 2 halaman terakhir via pdf_placer
     }]
 
     # inject_signature sudah pakai pdf_placer yang scan berdasarkan keyword
@@ -611,12 +622,11 @@ def _sync_pdf_bypass(
     # Wrap fitz.open dan override halaman yang diproses
     doc = fitz.open(stream=doc_bytes, filetype="pdf")
 
-    # Validasi: pastikan keyword ada di salah satu halaman target
+    # Validasi: pastikan keyword ada di setidaknya satu halaman dalam dokumen.
+    # Kita scan SEMUA halaman agar tidak false-negative ketika keyword ada
+    # di halaman tengah dokumen. Injeksi tetap dibatasi oleh zones_hint.
     keyword_found = False
-    for page_idx in page_indices:
-        if page_idx >= len(doc):
-            continue
-        page = doc[page_idx]
+    for page in doc:
         if page.search_for(keyword):
             keyword_found = True
             break
@@ -786,7 +796,7 @@ async def _process_docx(update: Update, ctx: ContextTypes.DEFAULT_TYPE, status_m
     finally:
         session_manager.remove_active_user(user_id)
         n_zones = 1 if is_template else len(selected_zones)
-        session_manager.clear_session(user_id, None)
+        session_manager.clear_session(user_id)
 
     return ConversationHandler.END
 
@@ -794,7 +804,7 @@ async def _process_docx(update: Update, ctx: ContextTypes.DEFAULT_TYPE, status_m
 # ── /cancel ───────────────────────────────────────────────────
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    session_manager.clear_session(user_id, None)
+    session_manager.clear_session(user_id)
     session_manager.remove_active_user(user_id)
     ctx.user_data.clear()
     await update.message.reply_text(

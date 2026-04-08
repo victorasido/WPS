@@ -64,3 +64,18 @@ class SignatureImageProcessor:
         w, h = img_clean.size
 
         return final_bytes, w, h
+
+
+def prepare_signature(path: str) -> bytes:
+    """
+    Muat file tanda tangan dari disk dan return sebagai PNG bytes.
+    Mendukung format SVG (dikonversi via cairosvg) dan raster (PNG/JPG).
+    """
+    ext = path.rsplit(".", 1)[-1].lower()
+    if ext == "svg":
+        import cairosvg
+        return cairosvg.svg2png(url=path)
+    img = Image.open(path).convert("RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()

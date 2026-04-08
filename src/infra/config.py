@@ -14,7 +14,7 @@ def get_libreoffice_path() -> str:
     elif system == "Darwin":  # macOS
         return "/Applications/LibreOffice.app/Contents/MacOS/soffice"
     else:  # Linux
-        return "libreoffice"
+        return "/usr/bin/libreoffice"
 
 LIBREOFFICE_PATH = get_libreoffice_path()
 
