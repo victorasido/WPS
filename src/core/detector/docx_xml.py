@@ -94,7 +94,11 @@ def find_slot_xml(tc, xml_rows: list, r_idx: int, c_idx: int):
             _has_dash = has_dash_in_tc(tc)
             return 0, "below_next_row", _has_dash
 
-    return None
+    # 5. Last Resort Fallback
+    # Jika tidak ada blank space sama sekali dalam tabel super padat,
+    # paksa injeksi di posisi atas teks pertama dalam sel.
+    # Lebih baik TTD sedikit menimpa teks, daripada gagal 0 zones.
+    return 0, "above_same", False
 
 
 def blank_above_in_paras(paras: list):

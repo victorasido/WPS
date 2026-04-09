@@ -23,9 +23,9 @@ class DefaultSemanticValidator:
     Contoh yang ditolak: "Dibuat oleh:", "Disetujui: Ya", "by: Farino"
     """
     _REJECT_PATTERNS = [
-        re.compile(r":\s*$"),          # diakhiri titik dua → label field
+        re.compile(r":\s*$"),          # diakhiri titik dua → tetap label field (kosong)
         re.compile(r"by\s*:", re.I),   # "by:" → indikasi log/metadata
-        re.compile(r"\w+\s*:\s*\S"),    # "Key: Value" → key-value pair
+        # re.compile(r"\w+\s*:\s*\S"), # Terlalu agresif, memblokir "Jabatan: Manager"
     ]
 
     def is_valid(self, text: str) -> bool:

@@ -102,7 +102,7 @@ async def handle_start_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── /sign ─────────────────────────────────────────────────────
 async def cmd_sign(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id in session_manager._active_users:
+    if session_manager.is_active(update.effective_user.id):
         await update.message.reply_text(
             "⏳ Ada proses yang sedang berjalan. Tunggu sebentar atau /cancel dulu."
         )
@@ -164,12 +164,13 @@ async def receive_docx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     buf.seek(0)
 
     user_id = update.effective_user.id
-    session_manager._user_sessions[user_id] = {
-        "doc_bytes":    buf.read(),
-        "doc_name":     doc.file_name,
-        "doc_type":     "docx" if is_docx else "pdf",
-                "chat_id":      update.effective_chat.id,
-    }
+    session_manager.set_document(
+        user_id=user_id,
+        doc_bytes=buf.read(),
+        doc_name=doc.file_name,
+        doc_type="docx" if is_docx else "pdf",
+        chat_id=update.effective_chat.id
+    )
 
     doc_type_label = "Word (.docx)" if is_docx else "PDF"
     await status.edit_text(
@@ -243,8 +244,11 @@ async def receive_sign_as_document(update: Update, ctx: ContextTypes.DEFAULT_TYP
         await msg.reply_text("⚠️ Sesi habis. Ketik /sign untuk mulai ulang.")
         return ConversationHandler.END
 
-    session["sign_bytes"] = buf.read()
-    session["sign_name"]  = doc.file_name or "signature.png"
+    session_manager.update_session(
+        user_id,
+        sign_bytes=buf.read(),
+        sign_name=doc.file_name or "signature.png"
+    )
 
     return await _after_sign_received(update, ctx)
 
@@ -269,8 +273,11 @@ async def receive_sign_as_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await tg_file.download_to_memory(buf)
     buf.seek(0)
 
-    session["sign_bytes"] = buf.read()
-    session["sign_name"]  = "signature.jpg"
+    session_manager.update_session(
+        user_id,
+        sign_bytes=buf.read(),
+        sign_name="signature.jpg"
+    )
 
     # Kasih tip tapi jangan halangi proses
     await msg.reply_text(
@@ -316,14 +323,25 @@ async def _after_sign_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     - DOCX → langsung proses
     """
     user_id = update.effective_user.id
-    session = session_manager._user_sessions[user_id]
+    session = session_manager.get_session(user_id)
+    if not session:
+        await update.message.reply_text("⚠️ Sesi habis. Ketik /sign untuk mulai ulang.")
+        return ConversationHandler.END
+
     doc_type = session["doc_type"]
     if doc_type == "pdf":
         # Auto-extract keyword dari nama file TTD (sama seperti DOCX)
         from src.shared.text_utils import extract_keyword as _extract_kw
         keyword = _extract_kw(session.get("sign_name", "signature.png"))
-        session["keyword"]   = keyword
-        session["sign_name"] = session.get("sign_name", "signature.png")
+        sign_name = session.get("sign_name", "signature.png")
+        
+        session_manager.update_session(
+            user_id,
+            keyword=keyword,
+            sign_name=sign_name
+        )
+        # Re-fetch session to ensure we have the updated fields
+        session = session_manager.get_session(user_id)
 
         status = await update.message.reply_text(
             f"📄 Dokumen PDF diterima.\n"
@@ -364,8 +382,13 @@ async def receive_keyword(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("⚠️ Sesi habis. Ketik /sign untuk mulai ulang.")
         return ConversationHandler.END
 
-    session["keyword"]    = keyword
-    session["sign_name"]  = session.get("sign_name", "signature.png")
+    session_manager.update_session(
+        user_id,
+        keyword=keyword,
+        sign_name=session.get("sign_name", "signature.png")
+    )
+    # Re-fetch session
+    session = session_manager.get_session(user_id)
 
     status = await msg.reply_text(
         f"🔍 Mencari `{keyword}` di PDF... mohon tunggu.",
@@ -389,7 +412,11 @@ async def _run_docx_detect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     Tampilkan zone selection dialog.
     """
     user_id = update.effective_user.id
-    session = session_manager._user_sessions[user_id]
+    session = session_manager.get_session(user_id)
+    if not session:
+        await update.message.reply_text("⚠️ Sesi habis. Ketik /sign untuk mulai ulang.")
+        return ConversationHandler.END
+
     msg     = await update.message.reply_text("🔍 Mendeteksi zona TTD...")
 
     try:
@@ -426,9 +453,18 @@ async def _run_docx_detect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 session["template_mode"] = False
                 logger.info(f"[{user_id}] Detection fallback: {len(zones)} zones")
 
-        session["keyword"]  = keyword
-        session["zones"]    = zones
-        session["selected"] = set(range(len(zones)))
+        # Persist ALL session changes to SQLite
+        session_manager.update_session(
+            user_id, 
+            keyword=keyword, 
+            zones=zones, 
+            selected=list(range(len(zones))),
+            template_mode=session.get("template_mode", False),
+            modified_docx=session.get("modified_docx")
+        )
+        # Re-fetch session to ensure we have the updated 'selected' list as a list (for JSON)
+        session = session_manager.get_session(user_id)
+
 
         if not zones:
             await msg.edit_text(
@@ -661,12 +697,13 @@ async def handle_zone_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     zones    = session["zones"]
-    selected = session["selected"]
+    selected = set(session["selected"])
     data     = query.data
 
     if data.startswith(f"{CB_ZONE_TOGGLE}:"):
         idx = int(data.split(":")[1])
         selected.discard(idx) if idx in selected else selected.add(idx)
+        session_manager.update_session(user_id, selected=list(selected))
         await query.edit_message_reply_markup(reply_markup=_kb_zones(zones, selected))
         return WAIT_ZONE_SELECT
 
@@ -675,6 +712,8 @@ async def handle_zone_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             selected.clear()
         else:
             selected.update(range(len(zones)))
+        
+        session_manager.update_session(user_id, selected=list(selected))
         await query.edit_message_reply_markup(reply_markup=_kb_zones(zones, selected))
         return WAIT_ZONE_SELECT
 

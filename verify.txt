@@ -1,0 +1,8 @@
+=== SINGLE SLOT ===
+'Division Head \nDivisi Developer (RCL/WDL/ADV)'
+
+=== MULTI SLOT (must not crossover) ===
+'Division Head \nDivisi Developer (RCL/WDL/ADV)'
+
+CROSSOVER CHECK: 
+PASS

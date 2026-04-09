@@ -1,79 +1,87 @@
-# 🤖 Word Signer: Headless Telegram Bot
+# Word Signer: Headless Telegram Bot
 
 **Word Signer Bot** adalah sistem otomatisasi penanda tanganan dokumen (Word & PDF) berbasis Telegram. Dirancang dengan **Clean Architecture**, bot ini mampu menyisipkan tanda tangan visual ke dalam dokumen dengan presisi geometris tinggi, tanpa merusak tata letak asli.
 
-> [!NOTE]
-> Proyek ini telah direfaktor sepenuhnya dari aplikasi desktop menjadi layanan *containerized* yang berjalan secara *headless* di server/Docker dengan arsitektur yang modular.
+> [!IMPORTANT]
+> Proyek ini telah berevolusi dari aplikasi desktop menjadi sistem _headless_ berperforma tinggi dengan fitur **Smart Layout Intelligence** yang mampu meniru penilaian estetika manusia dalam penempatan tanda tangan.
 
 ---
 
-## 🏗️ Arsitektur & Teknologi
+## 🚀 Fitur Unggulan
 
-Sistem ini menerapkan **Clean Architecture** untuk memastikan kode mudah diuji, dipelihara, dan independen terhadap framework luar.
+### 1. Smart Layout Intelligence (New!)
+Bot tidak lagi sekadar menempelkan gambar di atas teks, melainkan melakukan analisis spasial mendalam:
+- **Zone-Aware Adaptive Scale**: Otomatis mengecilkan TTD di formulir sempit (absen) dan membesarkannya di dokumen lebar (Memo/SK) agar proporsional.
+- **Horizontal Raycasting**: Bot "menembak radar" ke kiri dan kanan untuk mencari batas kolom kosong, memastikan TTD berada tepat di tengah ruang yang tersedia.
+- **Dash Boundary Adoption**: Jika terdapat garis putus-putus (`---`), bot akan menyalin koordinatnya untuk melakukan *perfect centering* layaknya editan manual.
 
-### Layer Arsitektur
-- **App Layer (`src/app`)**: Berisi handler Telegram dan workflow orkestrasi dokumen.
-- **Core Layer (`src/core`)**: Logika bisnis utama (Detection, Injection, PDF Placement, Validation).
-- **Infra Layer (`src/infra`)**: Implementasi detail teknis seperti Database (Repositories), Telemetri, dan Konfigurasi.
-- **Shared Layer (`src/shared`)**: Utilitas umum yang digunakan di lintas layer.
+### 2. Hybrid Session Management
+Menggunakan arsitektur penyimpanan hibrida untuk kecepatan maksimal:
+- **In-Memory Metadata**: Status alur kerja dan konfigurasi zona disimpan di RAM untuk respon instan.
+- **SQLite BLOB Persistence**: File dokumen dan TTD disimpan di disk hanya saat terjadi perubahan, mengeliminasi bottleneck I/O disk.
 
-### Tech Stack
-- **Core**: Python 3.10+
-- **Telegram Framework**: [python-telegram-bot](https://python-telegram-bot.org/) (v21.0+)
-- **PDF Engine**: [PyMuPDF (fitz)](https://pymupdf.readthedocs.io/) — Digunakan untuk analisis tata letak spasial dan injeksi gambar.
-- **Office Engine**: [LibreOffice Headless](https://www.libreoffice.org/) — Menjamin konversi DOCX ke PDF yang akurat.
-- **Observability**: [OpenTelemetry](https://opentelemetry.io/) — Tracing untuk memantau bottleneck pemrosesan.
-- **Infrastruktur**: Docker & Docker Compose.
-
----
-
-## 🔄 Program Flow
-
-Proses penanda tanganan mengikuti *pipeline* yang ketat:
-
-| Tahap | Komponen | Deskripsi | Hasil |
-|:--- |:--- |:--- |:--- |
-| **1. Ingest** | `DocumentWorkflow` | User upload Dokumen (.docx/.pdf) & TTD (.png/.jpg) | Session Created |
-| **2. Scan** | `DetectorEngine` | Mencari area tanda tangan menggunakan *Match Cascade* & Regex | List Target Zones |
-| **3. Convert** | `ConverterService` | Konversi DOCX ke PDF via LibreOffice (Skip jika input PDF) | PDF Bytes |
-| **4. Inject** | `PdfPlacer` | Menyisipkan TTD dengan *Geometric & Layout-Aware Constraints* | Signed PDF |
-| **5. Deliver** | `Bot -> User` | Mengirimkan dokumen final ke chat Telegram | Dokumen Selesai ✅ |
-
----
-
-## ✨ Fitur Unggulan
-
-### 1. Match Cascade & Semantic Validation
+### 3. Match Cascade & Semantic Validation
 Algoritma deteksi cerdas yang tidak hanya mencari teks, tapi juga memvalidasi konteks:
 - **Tier 1 (Exact)**: Mencari kecocokan kata yang identik.
 - **Tier 2 (Regex)**: Menangani variasi tanda hubung (`-`), garis bawah (`_`), atau spasi.
-- **Tier 3 (Semantic)**: Memastikan area yang ditemukan adalah area tanda tangan (misal: ada garis penutup).
-
-### 2. Layout-Aware Geometry
-Penyisipan tanda tangan menggunakan perhitungan spasial tingkat lanjut:
-- **Empty Slot Detection**: Menghitung area putih di sekitar keyword untuk menentukan tinggi ideal TTD.
-- **Scaling Constraints**: TTD secara otomatis di-*resize* agar tetap proporsional (maks 160x80pt).
-- **Table Support**: Mampu mendeteksi dan menyisipkan TTD di dalam sel tabel tanpa merusak garis tabel.
-
-### 3. Transparent PDF Processing
-Sistem mendukung penuh file PDF asli. Jika dokumen input adalah PDF, bot akan langsung melakukan scanning tanpa melalui tahap konversi Office, menjaga integritas file asli.
+- **Tier 3 (Block-Aware)**: Menggabungkan baris jabatan yang terpisah (multi-line role) tanpa menyebabkan polusi ke zona lain.
 
 ---
 
-## 🚀 Deployment (Docker Compose)
+## 🛠 Arsitektur & Teknologi
 
-### 1. Konfigurasi
-Buat file `.env` di root direktori:
-```env
-BOT_TOKEN=your_telegram_bot_token_here
-DATA_DIR=/app/data
-APP_ENV=production
-```
+Sistem ini menerapkan **Clean Architecture** untuk modularitas dan kemudahan pemeliharaan.
 
-### 2. Jalankan Service
-```bash
-docker-compose up -d --build
-```
+### Layer Arsitektur
+- **App Layer (`src/app`)**: Handler Telegram dan orchestrator workflow.
+- **Core Layer (`src/core`)**: Domain logic (Detector, Injector, Placer, Converter).
+- **Infra Layer (`src/infra`)**: Repository database, telemetry (Jaeger/OTLP), dan config.
+- **Shared Layer (`src/shared`)**: Utilitas PDF, Image Processing, dan Text Utilities.
+
+### Tech Stack
+- **Python 3.10+** & **python-telegram-bot** (v21.0+)
+- **PyMuPDF (fitz)**: Analisis spasial & injeksi PDF tingkat rendah.
+- **LibreOffice Headless**: Konversi DOCX ke PDF yang akurat.
+- **OpenTelemetry & Jaeger**: Monitoring performa dan bottleneck proses.
+- **Docker & Docker Compose**: Infrastruktur _isolated_.
+
+---
+
+## 💻 Command Cheat Sheet
+
+Berikut adalah kumpulan perintah penting untuk operasional dan pengembangan:
+
+### ⚙️ Manajemen Container
+| Perintah | Deskripsi |
+| :--- | :--- |
+| `docker-compose up -d --build bot` | **Update & Rebuild**: Jalankan setelah edit kode. |
+| `docker-compose stop bot` | Menghentikan bot tanpa menghapus container. |
+| `docker-compose restart bot` | Restart bot dengan cepat. |
+| `docker-compose down` | Mematikan seluruh layanan (Bot & Jaeger). |
+
+### 📝 Monitoring & Debugging
+| Perintah | Deskripsi |
+| :--- | :--- |
+| `docker-compose logs -f bot` | **Live Logs**: Pantau aktivitas bot secara real-time. |
+| `docker-compose logs --tail=50 bot` | Lihat 50 baris log terakhir. |
+| `docker-compose ps` | Cek status kesehatan container. |
+
+### 🔍 Observability (Jaeger)
+Setelah menjalankan sistem, buka browser dan akses:
+- **Jaeger UI**: `http://localhost:16686`
+- Manfaat: Lihat grafik durasi setiap tahap (Scan, Convert, Inject) untuk mencari bottleneck.
+
+---
+
+## 🔄 Program Flow Pipeline
+
+| Tahap | Komponen | Deskripsi |
+| :--- | :--- | :--- |
+| **Ingest** | `DocumentWorkflow` | User upload file & TTD. Metadata masuk ke _MetaCache_. |
+| **Scan** | `DetectorEngine` | Pencarian zona via _Block-Aware Anchor+Expand_. |
+| **Inject** | `PdfPlacer` | Penentuan koordinat dengan _Raycasting_ & _Dash Bounds_. |
+| **Render** | `Renderer` | Injeksi fisik dengan _Adaptive Scaling_ & _Overlap Guard_. |
+| **Deliver** | `Bot` | Pengiriman dokumen final ke user. |
 
 ---
 
@@ -82,22 +90,17 @@ docker-compose up -d --build
 .
 ├── bot.py                  # Entry Point (Orchestrator)
 ├── src/
-│   ├── app/                # Application Layer
-│   │   └── handlers/       # Telegram Command & Workflow Handlers
-│   ├── core/               # Domain/Business Logic
-│   │   ├── detector/       # Keyword & Zone Detection
-│   │   ├── injector/       # Core Injection Logic
-│   │   ├── pdf_placer/     # Spatial Layout Analysis
-│   │   └── converter/      # Office to PDF Conversion
-│   ├── infra/              # Infrastructure Layer
-│   │   ├── database/       # File & Session Repositories
-│   │   └── telemetry/      # OpenTelemetry Setup
-│   └── shared/             # Shared Utilities (PDF, Image, Text)
+│   ├── app/                # Application Layer (Handlers, Workflow)
+│   ├── core/               # Domain Layer (Detector, Injector, Converter)
+│   ├── infra/              # Infrastructure Layer (Database, Telemetry)
+│   └── shared/             # Shared Utils (PDF, Image, Text)
 ├── tests/                  # Automated Test Suite
-└── data/                   # Persistence Volume (Logs, Docs, Temps)
+└── data/                   # Persistence (SQLite, Logs, Temp Files)
 ```
 
 ---
 
-## ⚖️ Lisensi
-Dikembangkan untuk internal BNI (Bank Negara Indonesia) guna mempercepat alur kerja dokumen digital secara cerdas dan otomatis.
+## 🛠 Pengembangan & Kontribusi
+1. Pastikan docker terinstal.
+2. Edit file di direktori `src/`.
+3. Selalu jalankan `docker-compose up -d --build bot` setelah perubahan kode core agar perubahan terefleksi di container.

@@ -76,22 +76,50 @@ def expand_width_if_narrow(col_x0: float, col_x1: float, min_width: float = 200.
     return col_x0, col_x1
 
 
+def _find_horizontal_bounds(lines: list, page_width: float, y_top: float, y_bottom: float, keyword_x0: float, keyword_x1: float):
+    """
+    Horizontal Raycasting: meraba kekosongan (tembok kiri dan kanan)
+    di dalam sebuah lorong/koridor spasial (y_top sampai y_bottom).
+    Dibuat agar TTD bisa "nengah" secara elegan di ruang terbuka, 
+    bukan memusat statis di atas kata kuncinya.
+    """
+    left_wall = 0.0          
+    right_wall = page_width  
+
+    for l in lines:
+        if max(l["yt"], y_top) < min(l["yb"], y_bottom):
+            if l["x1"] <= keyword_x0:
+                left_wall = max(left_wall, l["x1"] + 15)
+            elif l["x0"] >= keyword_x1:
+                right_wall = min(right_wall, l["x0"] - 15)
+                
+    cx = (keyword_x0 + keyword_x1) / 2
+    left_wall = max(left_wall, cx - 150)
+    right_wall = min(right_wall, cx + 150)
+    
+    return left_wall, right_wall
+
+
 # ── Slot Finders ──────────────────────────────────────────────
 
 def find_slot_above(lines: list, name_idx: int, name_line: dict):
     """
     Cari blank space di atas nama dalam kolom yang sama.
 
-    Mengambil gap dari baris TERDEKAT di atas nama (bukan gap terbesar),
-    untuk memastikan rect berada tepat di antara nama dan baris di atasnya.
+    Menggunakan horizontal intersection logic agar lebih toleran
+    terhadap teks yang beda alignment (misal nama rata kiri,
+    title rata tengah).
     """
-    col_cx = name_line["cx"]
     col_x0 = name_line["x0"]
     col_x1 = name_line["x1"]
-    tol    = (col_x1 - col_x0) * 0.5 + 20
 
+    # Toleransi horizon box (kiri & kanan ditambah 50pt)
+    horizon_x0 = col_x0 - 50.0
+    horizon_x1 = col_x1 + 50.0
+
+    # L adalah satu kolom jika span horizontalnya overlap dengan horizon
     col_lines_above = sorted(
-        [l for l in lines if abs(l["cx"] - col_cx) < tol
+        [l for l in lines if (l["x1"] > horizon_x0 and l["x0"] < horizon_x1)
          and l["yt"] < name_line["yt"]],
         key=lambda l: l["yt"],
         reverse=True,  # terdekat (yt terbesar) duluan
@@ -106,11 +134,22 @@ def find_slot_above(lines: list, name_idx: int, name_line: dict):
     if gap < MIN_GAP_WHITESPACE:
         return None
 
-    col_x0, col_x1 = expand_width_if_narrow(col_x0, col_x1)
+    # Step 2: Raycast horizontal bounds dalam koridor ini
+    # supaya dapat center poin yang lebih leluasa di ruang kosong
+    col_x0, col_x1 = _find_horizontal_bounds(
+        lines, 600.0, nearest["yb"], name_line["yt"], name_line["x0"], name_line["x1"]
+    )
+
+    # Capping ttd box height
+    # Supaya tidak bablas kalau gap-nya sangat besar
+    max_slot_height = 80.0
+    top_y = nearest["yb"] + SIGNATURE_PADDING
+    if (name_line["yt"] - SIGNATURE_PADDING - top_y) > max_slot_height:
+        top_y = name_line["yt"] - SIGNATURE_PADDING - max_slot_height
 
     rect = fitz.Rect(
         col_x0,
-        nearest["yb"] + SIGNATURE_PADDING,
+        top_y,
         col_x1,
         name_line["yt"] - SIGNATURE_PADDING,
     )
@@ -119,21 +158,25 @@ def find_slot_above(lines: list, name_idx: int, name_line: dict):
 
 def find_dash_above(lines: list, name_idx: int, name_line: dict):
     """Cari garis --- di atas nama dalam kolom yang sama."""
-    col_cx = name_line["cx"]
     col_x0 = name_line["x0"]
     col_x1 = name_line["x1"]
-    tol    = (col_x1 - col_x0) * 0.5 + 20
+    horizon_x0 = col_x0 - 50.0
+    horizon_x1 = col_x1 + 50.0
 
     for line in reversed(lines[:name_idx]):
-        if abs(line["cx"] - col_cx) > tol:
+        if not (line["x1"] > horizon_x0 and line["x0"] < horizon_x1):
             continue
         txt = line["text"].replace(" ", "")
         if len(txt) >= 4 and all(c in "-_" for c in txt):
-            col_x0, col_x1 = expand_width_if_narrow(col_x0, col_x1)
+            # Adopsi lebar dari garis ---- untuk perfect centering
+            dash_x0 = line["x0"]
+            dash_x1 = line["x1"]
+            dash_x0, dash_x1 = expand_width_if_narrow(dash_x0, dash_x1)
+            
             rect = fitz.Rect(
-                col_x0,
-                line["yt"] - 80,
-                col_x1,
+                dash_x0,
+                max(line["yt"] - 80, line["yb"] + SIGNATURE_PADDING),
+                dash_x1,
                 line["yt"] - SIGNATURE_PADDING,
             )
             return ensure_min_height(rect)
@@ -146,13 +189,13 @@ def find_slot_below(lines: list, name_idx: int, name_line: dict):
     Cari blank space di BAWAH nama dalam kolom yang sama.
     Digunakan sebagai fallback ketika slot di atas tidak ditemukan.
     """
-    col_cx = name_line["cx"]
     col_x0 = name_line["x0"]
     col_x1 = name_line["x1"]
-    tol    = (col_x1 - col_x0) * 0.5 + 20
+    horizon_x0 = col_x0 - 50.0
+    horizon_x1 = col_x1 + 50.0
 
     col_lines_below = sorted(
-        [l for l in lines if abs(l["cx"] - col_cx) < tol
+        [l for l in lines if (l["x1"] > horizon_x0 and l["x0"] < horizon_x1)
          and l["yt"] > name_line["yb"]],
         key=lambda l: l["yt"],
     )
@@ -166,35 +209,47 @@ def find_slot_below(lines: list, name_idx: int, name_line: dict):
     if gap < MIN_GAP_WHITESPACE:
         return None
 
-    col_x0, col_x1 = expand_width_if_narrow(col_x0, col_x1)
+    # Step 2: Raycast horizontal bounds dalam koridor ini
+    col_x0, col_x1 = _find_horizontal_bounds(
+        lines, 600.0, name_line["yb"], nearest["yt"], name_line["x0"], name_line["x1"]
+    )
+
+    max_slot_height = 80.0
+    bottom_y = nearest["yt"] - SIGNATURE_PADDING
+    if (bottom_y - (name_line["yb"] + SIGNATURE_PADDING)) > max_slot_height:
+        bottom_y = name_line["yb"] + SIGNATURE_PADDING + max_slot_height
 
     rect = fitz.Rect(
         col_x0,
         name_line["yb"] + SIGNATURE_PADDING,
         col_x1,
-        nearest["yt"] - SIGNATURE_PADDING,
+        bottom_y,
     )
     return ensure_min_height(rect)
 
 
 def find_dash_below(lines: list, name_idx: int, name_line: dict):
     """Cari garis --- di BAWAH nama dalam kolom yang sama."""
-    col_cx = name_line["cx"]
     col_x0 = name_line["x0"]
     col_x1 = name_line["x1"]
-    tol    = (col_x1 - col_x0) * 0.5 + 20
+    horizon_x0 = col_x0 - 50.0
+    horizon_x1 = col_x1 + 50.0
 
     for line in lines[name_idx + 1:]:
-        if abs(line["cx"] - col_cx) > tol:
+        if not (line["x1"] > horizon_x0 and line["x0"] < horizon_x1):
             continue
         txt = line["text"].replace(" ", "")
         if len(txt) >= 4 and all(c in "-_" for c in txt):
-            col_x0, col_x1 = expand_width_if_narrow(col_x0, col_x1)
+            # Adopsi lebar dari garis ---- untuk perfect centering
+            dash_x0 = line["x0"]
+            dash_x1 = line["x1"]
+            dash_x0, dash_x1 = expand_width_if_narrow(dash_x0, dash_x1)
+            
             rect = fitz.Rect(
-                col_x0,
+                dash_x0,
                 line["yb"] + SIGNATURE_PADDING,
-                col_x1,
-                line["yb"] + 80,
+                dash_x1,
+                min(line["yb"] + 80, line["yt"] + 80),
             )
             return ensure_min_height(rect)
 

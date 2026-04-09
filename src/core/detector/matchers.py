@@ -82,15 +82,22 @@ def _partial_match(keyword: str, cell_text: str):
 
     # Layer 2: Strict Role vs Name Threshold
     label     = classify_label(keyword)
-    threshold = 1.0 if label == "role" else PARTIAL_MIN_RATIO
+    threshold = PARTIAL_MIN_RATIO
+    if label == "role":
+        # Role pendek (e.g. "Farino") butuh 100% match biar gak nyasar ke area lain.
+        # Role panjang (e.g. "Division Head Divisi Developer") butuh flexibilitas.
+        threshold = 1.0 if len(kw_words) <= 2 else 0.7
 
     ratio = len(matched) / len(kw_words)
     if ratio < threshold:
         return None
 
     # Layer 3: Negative Penalty Tie-Breaker
+    # Di-cap max 0.15 agar sel dengan teks panjang (contoh nama PT & Alamat) 
+    # tidak menghukum skor terlalu brutal hingga membatalkan match.
     extra_words      = len(cell_words) - len(matched)
-    penalty          = max(0, extra_words * 0.05)
+    penalty          = min(0.15, extra_words * 0.02)
+    
     base_conf        = CONF_PARTIAL_BASE + ratio * (CONF_ICASE - CONF_PARTIAL_BASE)
     final_confidence = max(0, base_conf - penalty)
 
