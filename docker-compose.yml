@@ -8,17 +8,13 @@ services:
       - ./.env:/app/.env
     environment:
       - DATA_DIR=/app/data
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
-    depends_on:
-      - jaeger
-
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    container_name: jaeger
-    restart: unless-stopped
     ports:
-      - "16686:16686" # Web UI
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
+      - "8443:8443"   # Webhook port — aktif hanya jika USE_WEBHOOK=true
+    deploy:
+      resources:
+        limits:
+          memory: 1g    # Bot tidak bisa memakai lebih dari 1GB RAM
+          cpus: "1.5"   # Maksimal 1.5 CPU core
+        reservations:
+          memory: 256m  # Jaminan minimum RAM agar tidak di-swap
+

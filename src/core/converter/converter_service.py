@@ -7,23 +7,16 @@ import os
 import subprocess
 import tempfile
 from src.infra.config import LIBREOFFICE_PATH
-from opentelemetry import trace
-from src.infra.telemetry.telemetry_setup import tracer
 
 
-@tracer.start_as_current_span("convert_to_pdf")
 def convert_to_pdf(signed_docx_bytes: bytes) -> bytes:
     """
     Convert DOCX bytes ke PDF bytes.
     Prioritas: LibreOffice headless → fallback docx2pdf
     """
-    span = trace.get_current_span()
-    span.set_attribute("document.input_size_bytes", len(signed_docx_bytes))
-    
     try:
         return _convert_with_libreoffice(signed_docx_bytes)
     except Exception as lo_err:
-        span.record_exception(lo_err)
         try:
             return _convert_with_docx2pdf(signed_docx_bytes)
         except ImportError:
@@ -33,15 +26,12 @@ def convert_to_pdf(signed_docx_bytes: bytes) -> bytes:
                 "Install dengan: pip install docx2pdf"
             )
         except Exception as dp_err:
-            span.record_exception(dp_err)
             raise RuntimeError(
                 f"Semua converter gagal.\n"
                 f"LibreOffice: {lo_err}\n"
                 f"docx2pdf: {dp_err}"
             )
 
-
-@tracer.start_as_current_span("_convert_with_libreoffice")
 def _convert_with_libreoffice(signed_docx_bytes: bytes) -> bytes:
     import shutil
     # Check if path is absolute or a valid command in PATH

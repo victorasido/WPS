@@ -3,6 +3,7 @@
 # Edit file ini untuk menyesuaikan behavior per institusi / deployment
 
 import platform
+import os
 
 
 # ── LibreOffice ───────────────────────────────────────────────
@@ -54,3 +55,7 @@ SIGNATURE_WIDTH_INCHES = 1.5
 
 # Buka PDF otomatis setelah selesai (GUI only)
 AUTO_OPEN_PDF = True
+
+# Batas konversi LibreOffice yang boleh berjalan bersamaan.
+# Turunkan jika RAM server terbatas, naikkan jika server berspesifikasi tinggi.
+MAX_CONVERSIONS: int = int(os.getenv("MAX_CONVERSIONS", "3"))

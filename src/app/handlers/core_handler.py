@@ -1,14 +1,7 @@
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
-# Shared constants that might be needed
-CB_START_SIGN = "start_sign"
-
-def _kb_start() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✍️  Mulai tanda tangan", callback_data=CB_START_SIGN),
-    ]])
-
+from src.app.ui.keyboards import get_start_keyboard
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "kamu"
@@ -20,7 +13,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• /sign — Mulai proses tanda tangan\n"
         "• /help — Panduan lengkap",
         parse_mode="Markdown",
-        reply_markup=_kb_start(),
+        reply_markup=get_start_keyboard(),
     )
 
 
@@ -43,7 +36,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• Nama file = keyword: `Manager Keuangan.png`\n\n"
         "/sign · /cancel",
         parse_mode="Markdown",
-        reply_markup=_kb_start(),
+        reply_markup=get_start_keyboard(),
     )
 
 

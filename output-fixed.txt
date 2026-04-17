@@ -1,6 +1,0 @@
-Keyword: Division Head Divisi Developer
-Class: role
-Test: Division Head Divisi Developer => Valid: True, Match: ('Division Head Divisi Developer', 1.0)
-Test: Division Head => Valid: True, Match: ('Division Head', 0.8)
-Test: Jabatan: Division Head Divisi Developer => Valid: True, Match: ('Jabatan: Division Head Divisi Developer', 1.0)
-Test: Division Head Divisi => Valid: True, Match: ('Division Head Divisi', 0.8)

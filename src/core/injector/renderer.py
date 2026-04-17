@@ -17,8 +17,6 @@ import logging
 import fitz
 from src.shared.image_utils import SignatureImageProcessor
 from src.shared.pdf_utils import rect_overlaps_text
-from opentelemetry import trace
-from src.infra.telemetry.telemetry_setup import tracer
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +64,6 @@ def _zone_scale_factor(zone_w: float, zone_h: float) -> float:
     return min(fw, fh)
 
 
-@tracer.start_as_current_span("place_image_with_constraints")
 def insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
     """
     Sisipkan TTD ke dalam rect dengan geometric constraints.
@@ -78,10 +75,6 @@ def insert_image(page, rect: fitz.Rect, sig_bytes: bytes):
     4. Bottom-aligned, center horizontal
     5. Fallback: insert di scale terkecil meski overlap (agar user tetap dapat PDF)
     """
-    span = trace.get_current_span()
-    span.set_attribute("geometry.zone_width",  rect.width)
-    span.set_attribute("geometry.zone_height", rect.height)
-
     processor = SignatureImageProcessor()
     sig_bytes, iw, ih = processor.process(sig_bytes)
 

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="900" viewBox="0 0 1000 900">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2b3e50"/>
+    </marker>
+    <style>
+      .box { fill: #f8fafc; stroke:#2b3e50; stroke-width:1.5; rx:6; ry:6 }
+      .text { font: 14px 'Segoe UI', Roboto, Arial; fill:#0f172a }
+      .title { font: bold 15px 'Segoe UI', Roboto, Arial }
+      .note { font: 12px 'Segoe UI', Roboto, Arial; fill:#334155 }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="20" y="30" class="title">Workflow Diagram — document_workflow.py</text>
+
+  <!-- Row 1 -->
+  <rect x="60" y="60" width="240" height="60" class="box"/>
+  <text x="180" y="95" text-anchor="middle" class="text">Start: /sign or Start</text>
+
+  <line x1="300" y1="90" x2="380" y2="90" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Row 2 -->
+  <rect x="380" y="50" width="260" height="80" class="box"/>
+  <text x="510" y="85" text-anchor="middle" class="text">WAIT_DOCX
+Receive .docx / .pdf</text>
+
+  <line x1="510" y1="130" x2="510" y2="180" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Decision -->
+  <rect x="420" y="180" width="180" height="60" class="box"/>
+  <text x="510" y="215" text-anchor="middle" class="text">Is .docx or .pdf?</text>
+
+  <!-- Invalid path -->
+  <line x1="420" y1="200" x2="240" y2="200" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="60" y="160" width="160" height="60" class="box"/>
+  <text x="140" y="195" text-anchor="middle" class="text">Invalid file type
+Stay in WAIT_DOCX</text>
+
+  <!-- .docx/.pdf path down -->
+  <line x1="510" y1="240" x2="510" y2="290" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="360" y="290" width="280" height="70" class="box"/>
+  <text x="500" y="330" text-anchor="middle" class="text">Store doc & prompt for signature
+(WAIT_SIGN)</text>
+
+  <line x1="500" y1="360" x2="500" y2="420" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- WAIT_SIGN -->
+  <rect x="360" y="420" width="280" height="70" class="box"/>
+  <text x="500" y="460" text-anchor="middle" class="text">WAIT_SIGN
+Receive signature image</text>
+
+  <line x1="500" y1="490" x2="500" y2="540" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Session exists? -->
+  <rect x="360" y="540" width="280" height="60" class="box"/>
+  <text x="500" y="575" text-anchor="middle" class="text">Session exists?</text>
+
+  <!-- Session No -->
+  <line x1="420" y1="560" x2="240" y2="560" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="60" y="520" width="160" height="60" class="box"/>
+  <text x="140" y="555" text-anchor="middle" class="text">Session expired → End</text>
+
+  <!-- Session Yes -->
+  <line x1="500" y1="600" x2="500" y2="660" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="360" y="660" width="280" height="60" class="box"/>
+  <text x="500" y="695" text-anchor="middle" class="text">Document type == PDF?</text>
+
+  <!-- PDF path -->
+  <line x1="580" y1="690" x2="760" y2="690" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="760" y="650" width="200" height="80" class="box"/>
+  <text x="860" y="690" text-anchor="middle" class="text">PDF: extract keyword
+(or prompt WAIT_KEYWORD)</text>
+
+  <line x1="860" y1="730" x2="860" y2="780" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="760" y="780" width="200" height="60" class="box"/>
+  <text x="860" y="815" text-anchor="middle" class="text">_run_pdf_bypass → inject → send PDF</text>
+
+  <!-- DOCX path (left) -->
+  <line x1="420" y1="690" x2="220" y2="690" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="60" y="720" width="240" height="80" class="box"/>
+  <text x="180" y="760" text-anchor="middle" class="text">DOCX: detect template?
+→ detect zones → WAIT_ZONE_SELECT</text>
+
+  <line x1="300" y1="720" x2="360" y2="720" stroke="#2b3e50" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="360" y="820" width="280" height="60" class="box"/>
+  <text x="500" y="855" text-anchor="middle" class="text">_process_docx → convert & inject → send PDF</text>
+
+  <!-- Cancel note -->
+  <text x="20" y="860" class="note">Note: /cancel clears session at any time.</text>
+</svg>

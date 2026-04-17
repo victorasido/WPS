@@ -5,7 +5,7 @@ Konduktor pipeline injeksi tanda tangan.
 Flow:
     1. Persiapkan signature bytes (prepare_signature)
     2. Coba PRIMARY path: geometry-based placement via pdf_placer
-    3. Jika PRIMARY gagal (0 hasil): fallback ke legacy scorer
+    3. Jika PRIMARY gagal (0 hasil): fallback ke spatial scorer
     4. Insert gambar ke semua placement yang ditemukan
     5. Simpan & return PDF bytes baru
 
@@ -16,18 +16,15 @@ semua caller (document_workflow.py) tidak perlu dimodifikasi.
 import io
 import logging
 import fitz
-from opentelemetry import trace
-from src.infra.telemetry.telemetry_setup import tracer
 from src.shared.image_utils import prepare_signature
 from .renderer import insert_image
-from .legacy_scorer import find_signature_rect
+from .spatial_scoring import find_signature_rect
 
 logger = logging.getLogger(__name__)
 
 
 # ── Main Public API ───────────────────────────────────────────
 
-@tracer.start_as_current_span("inject_signature_pipeline")
 def inject_signature(pdf_bytes: bytes, signature_path: str,
                      signature_zones: list) -> bytes:
     """
@@ -35,17 +32,12 @@ def inject_signature(pdf_bytes: bytes, signature_path: str,
 
     Primary path  : geometry-based placement via pdf_placer
                     (layout-aware, handles multi-column, no hardcoded logic)
-    Fallback path : legacy keyword-scoring (find_signature_rect)
+    Fallback path : spatial keyword-scoring (find_signature_rect)
                     used only if geometry placer returns 0 results
 
     Public API unchanged — callers (document_workflow.py) need no modification.
     """
     from src.core.pdf_placer import place_all_signatures  # late import (avoid circular)
-
-    span = trace.get_current_span()
-    span.set_attribute("pipeline.target_zones_count",
-                       len(signature_zones) if signature_zones else 0)
-    span.set_attribute("document.pdf_size_bytes", len(pdf_bytes))
 
     sig_bytes = prepare_signature(signature_path)
     doc       = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -67,7 +59,7 @@ def inject_signature(pdf_bytes: bytes, signature_path: str,
 
     # ── FALLBACK: legacy scorer with dedup guard ──
     if not placements:
-        logger.info("[INJ] Geometry placer got 0 results — switching to legacy mode")
+        logger.info("[INJ] Geometry placer got 0 results — switching to spatial scoring mode")
         placements = _legacy_place(doc, keyword, signature_zones)
 
     # ── Insert images ──
