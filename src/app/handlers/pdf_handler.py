@@ -7,6 +7,12 @@ from telegram.ext import ContextTypes, ConversationHandler
 from src.app.services.workflow_orchestrator import WorkflowOrchestrator
 from src.app.ui import messages
 from src.app.utils.decorators import handle_workflow_error
+from src.infra.config import (
+    TELEGRAM_CONNECT_TIMEOUT,
+    TELEGRAM_POOL_TIMEOUT,
+    TELEGRAM_READ_TIMEOUT,
+    TELEGRAM_WRITE_TIMEOUT,
+)
 from src.infra.database import LogRepository, session_manager
 from src.shared.text_utils import extract_keyword
 from src.shared.validators import validate_keyword
@@ -18,7 +24,7 @@ WAIT_KEYWORD = 3
 
 async def after_sign_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    session = session_manager.get_session(user_id)
+    session = session_manager.get_session(user_id, include_blobs=False)
     if not session:
         await update.message.reply_text(messages.get_session_expired())
         return ConversationHandler.END
@@ -54,7 +60,7 @@ async def receive_keyword(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return WAIT_KEYWORD
 
     user_id = update.effective_user.id
-    session = session_manager.get_session(user_id)
+    session = session_manager.get_session(user_id, include_blobs=False)
     if not session:
         await msg.reply_text(messages.get_session_expired())
         return ConversationHandler.END
@@ -120,10 +126,10 @@ async def _run_pdf_bypass(
             filename=output_name,
             caption=messages.get_success_pdf(doc_name, keyword, output_name),
             parse_mode="Markdown",
-            read_timeout=60,
-            write_timeout=60,
-            connect_timeout=60,
-            pool_timeout=60,
+            read_timeout=TELEGRAM_READ_TIMEOUT,
+            write_timeout=TELEGRAM_WRITE_TIMEOUT,
+            connect_timeout=TELEGRAM_CONNECT_TIMEOUT,
+            pool_timeout=TELEGRAM_POOL_TIMEOUT,
         )
 
         try:

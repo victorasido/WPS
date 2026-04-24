@@ -100,3 +100,42 @@
                     Output   : telegram_output
                     TTD      : 1 zona ditandatangani
 
+[17 Apr 2026, 08:07]  ✓ BERHASIL
+                    Dokumen  : Functional_Specification_Document_FSD_MPM_Dom_CR46881_signed.pdf
+                    Output   : telegram_pdf_bypass
+                    TTD      : 1 zona ditandatangani
+
+[17 Apr 2026, 08:19]  ✓ BERHASIL
+                    Dokumen  : Functional_Specification_Document_FSD_MPM_Dom_CR46881.docx
+                    Output   : telegram_output
+                    TTD      : 1 zona ditandatangani
+
+[17 Apr 2026, 08:20]  ✗ GAGAL
+                    Dokumen  : Technical_Spesification_Document_(TSD)_-_MPM_Dom_(CR46881).docx
+                    Penyebab : disk I/O error
+
+[17 Apr 2026, 09:15]  ✓ BERHASIL
+                    Dokumen  : Functional_Specification_Document_FSD_MPM_Dom_CR46881_signed.pdf
+                    Output   : telegram_pdf_bypass
+                    TTD      : 1 zona ditandatangani
+
+[17 Apr 2026, 09:18]  ✓ BERHASIL
+                    Dokumen  : Functional_Specification_Document_FSD_MPM_Dom_CR46881_signed.pdf
+                    Output   : telegram_pdf_bypass
+                    TTD      : 1 zona ditandatangani
+
+[17 Apr 2026, 09:20]  ✓ BERHASIL
+                    Dokumen  : Technical_Spesification_Document_(TSD)_-_MPM_Dom_(CR46881).docx
+                    Output   : telegram_output
+                    TTD      : 1 zona ditandatangani
+
+[17 Apr 2026, 09:40]  ✓ BERHASIL
+                    Dokumen  : Technical_Spesification_Document_(TSD)_-_MPM_Dom_(CR46881).docx
+                    Output   : telegram_output
+                    TTD      : 1 zona ditandatangani
+
+[20 Apr 2026, 09:57]  ✓ BERHASIL
+                    Dokumen  : unit-test-qris-nfc-tap-payment-debit-offus.docx
+                    Output   : telegram_output
+                    TTD      : 1 zona ditandatangani
+

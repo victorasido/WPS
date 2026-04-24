@@ -93,7 +93,10 @@ def find_signature_rect(doc, name: str, zone: dict = None):
     preferred = zone.get("inject_position")
     logger.debug(f"[INJ] Classification: {name} → {label}, preferred: {preferred}")
 
-    for page in doc:
+    target_pages = [zone.get("page_num")] if zone and zone.get("page_num") is not None else range(len(doc))
+    
+    for page_num in target_pages:
+        page = doc[page_num]
         lines = extract_lines(page)
         if not lines:
             continue

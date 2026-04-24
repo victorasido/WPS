@@ -14,13 +14,14 @@ Cara pakai:
 
 import asyncio
 import logging
-import os
+
+from src.infra.config import MAX_CONVERSIONS
 
 logger = logging.getLogger(__name__)
 
 # Batas konversi LibreOffice yang boleh berjalan bersamaan.
-# Dapat diubah via env var MAX_CONVERSIONS (default: 3).
-MAX_CONCURRENT_CONVERSIONS: int = int(os.getenv("MAX_CONVERSIONS", "3"))
+# Default production dibuat lebih konservatif via src.infra.config.
+MAX_CONCURRENT_CONVERSIONS: int = MAX_CONVERSIONS
 
 _semaphore: asyncio.Semaphore | None = None
 

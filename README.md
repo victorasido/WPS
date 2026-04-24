@@ -100,30 +100,43 @@ Berikut adalah variabel-variabel kunci di `.env`:
 | `BOT_TOKEN` | Token API Bot Telegram bawaan dari [@BotFather](https://t.me/BotFather). | - (Wajib) |
 | `APP_ENV` | Mode lingkungan (`development` atau `production`). | `development` |
 | `DATA_DIR` | Direktori lokal (*bind-mounted*) untuk SQLite & File Logs. | `./data` |
-| `MAX_CONVERSIONS` | Batas keamanan maksimum pemrosesan paralel LibreOffice. Menaikkan batas memakan lebih banyak RAM. | `3` |
+| `MAX_CONVERSIONS` | Batas keamanan maksimum pemrosesan paralel LibreOffice. Jika tidak di-set, runtime memakai default `1` di `production` dan `3` di `development`. | `auto` |
+| `LIBREOFFICE_TIMEOUT` | Timeout subprocess LibreOffice dalam detik agar konversi tidak menggantung tanpa batas. | `180` / `300` |
+| `TELEGRAM_CONNECT_TIMEOUT` | Timeout koneksi ke Telegram API. | `30` |
+| `TELEGRAM_READ_TIMEOUT` | Timeout baca response Telegram API, terutama saat download/upload file besar. | `180` |
+| `TELEGRAM_WRITE_TIMEOUT` | Timeout kirim body request Telegram API. | `180` |
+| `TELEGRAM_POOL_TIMEOUT` | Timeout antrean koneksi HTTP Telegram API. | `30` |
 | `USE_WEBHOOK` | Mode hemat CPU (*Production*). Ganti ke `true` untuk aktif. Membutuhkan Domain Publik + SSL. | `false` |
 | `WEBHOOK_URL` | URL Endpoint penerima *update* dari Telegram. | - |
 | `WEBHOOK_PORT` | Port internal aplikasi yang mendengarkan request dari Webhook. | `8443` |
 
 ---
 
-## 💻 Command Cheat Sheet
+## 🐳 Panduan Operasional Docker (Cheat Sheet)
 
-Berikut kumpulan perintah penting untuk fase _Production Deploy_:
+Mengingat arsitektur aplikasi bergantung pada lingkungan isolasi *(containerized)*, berikut adalah perintah esensial untuk memanajemen *lifecycle* pelayanan bot menggunakan terminal atau Docker Desktop.
 
-### ⚙️ Manajemen Container
+### ⚙️ Manajemen Siklus Hidup (Lifecycle)
 | Perintah | Deskripsi |
 | :--- | :--- |
-| `docker-compose up -d --build bot` | **Rebuild Image**: Terapkan ini usai melakukan modifikasi kode. |
-| `docker stats wordsigner_bot` | Cek penggunaan RAM/CPU Real-Time (Pastikan tidak membentur batas limits container). |
-| `docker-compose stop bot` | Hentikan pelacakan sistem Telegram dengan rapi. |
-| `docker-compose down` | Matikan dan singkirkan Bot dari container jaringan lokal. |
+| `docker-compose up -d` | **Start**: Menjalankan *bot* di *background* (*detached mode*). |
+| `docker-compose up -d --build` | **Rebuild**: Wajib dijalankan apabila Anda melakukan modifikasi di `src/`, mengubah file `Dockerfile`, atau me-refresh `requirements.txt`. |
+| `docker-compose restart` | Memulai ulang bot (berguna jika konfigurasi `.env` baru saja dirubah). |
+| `docker-compose stop` | Menghentikan bot sementara (membiarkan jaringan internal utuh). |
+| `docker-compose down` | **Tear Down**: Mematikan dan membuang wadah kontainer (*destroy*) beserta jaringannya. Tidak akan menghapus basis data SQLite di folder `data/`. |
 
-### 📝 Monitoring & Debugging
+### 📝 Observasi & Telemetri Log
 | Perintah | Deskripsi |
 | :--- | :--- |
-| `docker-compose logs -f bot` | **Live Logs**: Pantau aktivitas secara real-time. Memuat Log Antrean / *Semaphore Lock*. |
-| `docker-compose logs --tail=100 bot` | Tampilkan rekam jejak 100 baris event terakhir. |
+| `docker-compose logs -f` | **Live Logs**: Duduk dan pantau obrolan Telegram di balik layar. Sangat penting untuk melihat antrean eksekusi *Semaphore Lock*. |
+| `docker-compose logs --tail=50` | Hanya mencetak 50 baris interaksi terakhir agar terminal tidak banjir log. |
+| `docker stats wordsigner_bot` | **Resource Monitoring**: Melihat grafik konsumsi RAM dan CPU terkini. Sangat krusial untuk memastikan tidak memakan jatah memori melampaui setelan _Limit_ (`1GB`). |
+
+### 🛠 Skala Produksi Ekstensif & Pemeliharaan
+| Perintah | Deskripsi |
+| :--- | :--- |
+| `docker-compose exec bot /bin/bash` | **Masuk (SSH) ke dalam Bot**: Berguna apabila Anda mau meriset file di dalam Ubuntu Server virtual bot secara langsung. (Ketik `exit` untuk keluar). |
+| `docker system prune -a --volumes` | **Hard Reset (Pembersihan Ekstrem)**: Hapus sistem *cache docker*, gambar usang, lalu _deploy_ ulang ruang memori Anda (jika memori SSD Anda penuh). |
 
 ---
 

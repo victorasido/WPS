@@ -113,9 +113,9 @@ def find_slot_above(lines: list, name_idx: int, name_line: dict):
     col_x0 = name_line["x0"]
     col_x1 = name_line["x1"]
 
-    # Toleransi horizon box (kiri & kanan ditambah 50pt)
-    horizon_x0 = col_x0 - 50.0
-    horizon_x1 = col_x1 + 50.0
+    # Toleransi horizon box (kiri & kanan ditambah 20pt)
+    horizon_x0 = col_x0 - 20.0
+    horizon_x1 = col_x1 + 20.0
 
     # L adalah satu kolom jika span horizontalnya overlap dengan horizon
     col_lines_above = sorted(
@@ -160,8 +160,8 @@ def find_dash_above(lines: list, name_idx: int, name_line: dict):
     """Cari garis --- di atas nama dalam kolom yang sama."""
     col_x0 = name_line["x0"]
     col_x1 = name_line["x1"]
-    horizon_x0 = col_x0 - 50.0
-    horizon_x1 = col_x1 + 50.0
+    horizon_x0 = col_x0 - 20.0
+    horizon_x1 = col_x1 + 20.0
 
     for line in reversed(lines[:name_idx]):
         if not (line["x1"] > horizon_x0 and line["x0"] < horizon_x1):
@@ -173,12 +173,12 @@ def find_dash_above(lines: list, name_idx: int, name_line: dict):
             dash_x1 = line["x1"]
             dash_x0, dash_x1 = expand_width_if_narrow(dash_x0, dash_x1)
             
-            rect = fitz.Rect(
-                dash_x0,
-                max(line["yt"] - 80, line["yb"] + SIGNATURE_PADDING),
-                dash_x1,
-                line["yt"] - SIGNATURE_PADDING,
-            )
+            # Tempatkan TTD di ruang ATAS garis dash:
+            # y1 (bawah rect) = tepat di atas garis dash
+            # y0 (atas rect)  = 80pt ke atas dari y1
+            rect_y1 = line["yt"] - SIGNATURE_PADDING
+            rect_y0 = rect_y1 - 80
+            rect = fitz.Rect(dash_x0, rect_y0, dash_x1, rect_y1)
             return ensure_min_height(rect)
 
     return None
@@ -191,8 +191,8 @@ def find_slot_below(lines: list, name_idx: int, name_line: dict):
     """
     col_x0 = name_line["x0"]
     col_x1 = name_line["x1"]
-    horizon_x0 = col_x0 - 50.0
-    horizon_x1 = col_x1 + 50.0
+    horizon_x0 = col_x0 - 20.0
+    horizon_x1 = col_x1 + 20.0
 
     col_lines_below = sorted(
         [l for l in lines if (l["x1"] > horizon_x0 and l["x0"] < horizon_x1)
@@ -232,8 +232,8 @@ def find_dash_below(lines: list, name_idx: int, name_line: dict):
     """Cari garis --- di BAWAH nama dalam kolom yang sama."""
     col_x0 = name_line["x0"]
     col_x1 = name_line["x1"]
-    horizon_x0 = col_x0 - 50.0
-    horizon_x1 = col_x1 + 50.0
+    horizon_x0 = col_x0 - 20.0
+    horizon_x1 = col_x1 + 20.0
 
     for line in lines[name_idx + 1:]:
         if not (line["x1"] > horizon_x0 and line["x0"] < horizon_x1):

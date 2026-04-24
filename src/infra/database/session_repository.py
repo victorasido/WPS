@@ -53,7 +53,10 @@ class SessionManager:
             conn.commit()
 
     def _get_conn(self):
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=15.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        return conn
 
     # ── Write: document upload ───────────────────────────────────────────────
 
@@ -82,14 +85,16 @@ class SessionManager:
 
     # ── Read ─────────────────────────────────────────────────────────────────
 
-    def get_session(self, user_id: int) -> Optional[dict]:
+    def get_session(self, user_id: int, *, include_blobs: bool = True) -> Optional[dict]:
         """
-        Hot path: metadata dari memory cache, blobs dari SQLite (1 query ringkas).
-        Cold path (bot restart): load semua dari SQLite, populate cache.
+        Hot path: metadata dari memory cache, blobs dari SQLite bila diminta.
+        Cold path (bot restart): load dari SQLite, lalu populate cache.
         """
         if user_id in self._meta_cache:
-            # Metadata dari cache (super cepat), ambil only blobs dari DB
             meta = self._meta_cache[user_id].copy()
+            if not include_blobs:
+                return meta
+
             with self._get_conn() as conn:
                 cursor = conn.execute(
                     "SELECT doc_bytes, sign_bytes, modified_docx FROM sessions WHERE user_id = ?",
@@ -100,17 +105,22 @@ class SessionManager:
                     # Row hilang (misal manual delete DB) — bersihkan cache
                     self._meta_cache.pop(user_id, None)
                     return None
-                meta["doc_bytes"]     = row[0]
-                meta["sign_bytes"]    = row[1]
+                meta["doc_bytes"] = row[0]
+                meta["sign_bytes"] = row[1]
                 meta["modified_docx"] = row[2]
             return meta
 
-        # Cold start: load dari SQLite, populate cache
         with self._get_conn() as conn:
-            cursor = conn.execute(
-                "SELECT metadata, doc_bytes, sign_bytes, modified_docx FROM sessions WHERE user_id = ?",
-                (user_id,)
-            )
+            if include_blobs:
+                cursor = conn.execute(
+                    "SELECT metadata, doc_bytes, sign_bytes, modified_docx FROM sessions WHERE user_id = ?",
+                    (user_id,)
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT metadata FROM sessions WHERE user_id = ?",
+                    (user_id,)
+                )
             row = cursor.fetchone()
             if not row:
                 return None
@@ -118,9 +128,12 @@ class SessionManager:
             meta = json.loads(row[0])
             self._meta_cache[user_id] = meta.copy()  # seed cache
 
+            if not include_blobs:
+                return meta.copy()
+
             session = meta.copy()
-            session["doc_bytes"]     = row[1]
-            session["sign_bytes"]    = row[2]
+            session["doc_bytes"] = row[1]
+            session["sign_bytes"] = row[2]
             session["modified_docx"] = row[3]
             return session
 
@@ -136,7 +149,7 @@ class SessionManager:
         """
         if user_id not in self._meta_cache:
             # Cold start: seed cache dulu
-            session = self.get_session(user_id)
+            session = self.get_session(user_id, include_blobs=False)
             if not session:
                 return
 

@@ -14,6 +14,12 @@ from src.app.ui import messages
 from src.app.ui.keyboards import CB_START_SIGN, get_start_keyboard
 from src.app.utils.tg_downloader import download_tg_file
 from src.infra.database import session_manager
+from src.infra.config import (
+    TELEGRAM_CONNECT_TIMEOUT,
+    TELEGRAM_POOL_TIMEOUT,
+    TELEGRAM_READ_TIMEOUT,
+    TELEGRAM_WRITE_TIMEOUT,
+)
 from src.shared.validators import validate_document_file, validate_signature_file
 
 WAIT_DOCX = 0
@@ -49,7 +55,13 @@ async def receive_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return WAIT_DOCX
 
     is_docx = (doc.file_name or "").lower().endswith(".docx")
-    status_msg = await msg.reply_text(messages.get_downloading_document())
+    status_msg = await msg.reply_text(
+        messages.get_downloading_document(),
+        connect_timeout=TELEGRAM_CONNECT_TIMEOUT,
+        read_timeout=TELEGRAM_READ_TIMEOUT,
+        write_timeout=TELEGRAM_WRITE_TIMEOUT,
+        pool_timeout=TELEGRAM_POOL_TIMEOUT,
+    )
     session_manager.set_document(
         user_id=update.effective_user.id,
         doc_bytes=await download_tg_file(msg),
@@ -57,7 +69,14 @@ async def receive_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         doc_type="docx" if is_docx else "pdf",
         chat_id=update.effective_chat.id,
     )
-    await status_msg.edit_text(messages.get_document_received(doc.file_name, is_docx), parse_mode="Markdown")
+    await status_msg.edit_text(
+        messages.get_document_received(doc.file_name, is_docx),
+        parse_mode="Markdown",
+        connect_timeout=TELEGRAM_CONNECT_TIMEOUT,
+        read_timeout=TELEGRAM_READ_TIMEOUT,
+        write_timeout=TELEGRAM_WRITE_TIMEOUT,
+        pool_timeout=TELEGRAM_POOL_TIMEOUT,
+    )
     return WAIT_SIGN
 
 
@@ -80,12 +99,19 @@ async def receive_sign_as_document(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
 
 async def receive_sign_as_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    session = session_manager.get_session(update.effective_user.id)
+    session = session_manager.get_session(update.effective_user.id, include_blobs=False)
     if not session:
         await update.message.reply_text(messages.get_session_expired())
         return ConversationHandler.END
 
-    await update.message.reply_text(messages.get_photo_signature_received(), parse_mode="Markdown")
+    await update.message.reply_text(
+        messages.get_photo_signature_received(),
+        parse_mode="Markdown",
+        connect_timeout=TELEGRAM_CONNECT_TIMEOUT,
+        read_timeout=TELEGRAM_READ_TIMEOUT,
+        write_timeout=TELEGRAM_WRITE_TIMEOUT,
+        pool_timeout=TELEGRAM_POOL_TIMEOUT,
+    )
     return await _store_signature_and_route(update, ctx, sign_bytes=await download_tg_file(update.message), sign_name="signature.jpg")
 
 
@@ -97,7 +123,7 @@ async def _store_signature_and_route(
     sign_name: str,
 ):
     user_id = update.effective_user.id
-    session = session_manager.get_session(user_id)
+    session = session_manager.get_session(user_id, include_blobs=False)
     if not session:
         await update.message.reply_text(messages.get_session_expired())
         return ConversationHandler.END

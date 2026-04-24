@@ -1,18 +1,18 @@
 # converter_service.py
-# Tanggung jawab: Convert DOCX bytes → PDF bytes
+# Tanggung jawab: Convert DOCX bytes -> PDF bytes
 # Coba LibreOffice headless dulu, fallback ke docx2pdf jika gagal
 
-import io
 import os
 import subprocess
 import tempfile
-from src.infra.config import LIBREOFFICE_PATH
+
+from src.infra.config import LIBREOFFICE_PATH, LIBREOFFICE_TIMEOUT
 
 
 def convert_to_pdf(signed_docx_bytes: bytes) -> bytes:
     """
     Convert DOCX bytes ke PDF bytes.
-    Prioritas: LibreOffice headless → fallback docx2pdf
+    Prioritas: LibreOffice headless -> fallback docx2pdf
     """
     try:
         return _convert_with_libreoffice(signed_docx_bytes)
@@ -32,9 +32,10 @@ def convert_to_pdf(signed_docx_bytes: bytes) -> bytes:
                 f"docx2pdf: {dp_err}"
             )
 
+
 def _convert_with_libreoffice(signed_docx_bytes: bytes) -> bytes:
     import shutil
-    # Check if path is absolute or a valid command in PATH
+
     if not os.path.exists(LIBREOFFICE_PATH) and not shutil.which(LIBREOFFICE_PATH):
         raise FileNotFoundError(f"LibreOffice tidak ditemukan di path: {LIBREOFFICE_PATH}")
 
@@ -43,11 +44,17 @@ def _convert_with_libreoffice(signed_docx_bytes: bytes) -> bytes:
         with open(docx_tmp, "wb") as f:
             f.write(signed_docx_bytes)
 
-        result = subprocess.run(
-            [LIBREOFFICE_PATH, "--headless", "--convert-to", "pdf",
-             "--outdir", tmpdir, docx_tmp],
-            capture_output=True, text=True
-        )
+        try:
+            result = subprocess.run(
+                [LIBREOFFICE_PATH, "--headless", "--convert-to", "pdf", "--outdir", tmpdir, docx_tmp],
+                capture_output=True,
+                text=True,
+                timeout=LIBREOFFICE_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"LibreOffice melebihi batas {LIBREOFFICE_TIMEOUT} detik saat konversi."
+            ) from exc
 
         if result.returncode != 0:
             raise RuntimeError(f"LibreOffice error:\n{result.stderr}")
@@ -62,9 +69,10 @@ def _convert_with_libreoffice(signed_docx_bytes: bytes) -> bytes:
 
 def _convert_with_docx2pdf(signed_docx_bytes: bytes) -> bytes:
     import docx2pdf  # noqa: imported lazily as fallback
+
     with tempfile.TemporaryDirectory() as tmpdir:
         docx_tmp = os.path.join(tmpdir, "document.docx")
-        pdf_tmp  = os.path.join(tmpdir, "document.pdf")
+        pdf_tmp = os.path.join(tmpdir, "document.pdf")
         with open(docx_tmp, "wb") as f:
             f.write(signed_docx_bytes)
         docx2pdf.convert(docx_tmp, pdf_tmp)

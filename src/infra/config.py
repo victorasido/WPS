@@ -20,6 +20,19 @@ def get_libreoffice_path() -> str:
 LIBREOFFICE_PATH = get_libreoffice_path()
 
 
+# ── Runtime Environment ───────────────────────────────────────────────────────
+
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+
+
+def _get_int_env(name: str, default: int) -> int:
+    return int(os.getenv(name, str(default)))
+
+
+def _get_float_env(name: str, default: float) -> float:
+    return float(os.getenv(name, str(default)))
+
+
 # ── Detection ─────────────────────────────────────────────────
 
 # Minimum confidence score untuk zona TTD dianggap valid (0.0 – 1.0)
@@ -57,5 +70,21 @@ SIGNATURE_WIDTH_INCHES = 1.5
 AUTO_OPEN_PDF = True
 
 # Batas konversi LibreOffice yang boleh berjalan bersamaan.
-# Turunkan jika RAM server terbatas, naikkan jika server berspesifikasi tinggi.
-MAX_CONVERSIONS: int = int(os.getenv("MAX_CONVERSIONS", "3"))
+# Production default dibuat lebih konservatif agar VPS kecil tidak mudah timeout/OOM.
+MAX_CONVERSIONS = _get_int_env(
+    "MAX_CONVERSIONS",
+    1 if APP_ENV == "production" else 3,
+)
+
+# Batas waktu subprocess LibreOffice agar proses tidak menggantung terlalu lama.
+LIBREOFFICE_TIMEOUT = _get_int_env(
+    "LIBREOFFICE_TIMEOUT",
+    180 if APP_ENV == "production" else 300,
+)
+
+# Timeout koneksi Telegram API. Upload/download file besar di server butuh headroom
+# lebih besar dibanding lokal.
+TELEGRAM_CONNECT_TIMEOUT = _get_float_env("TELEGRAM_CONNECT_TIMEOUT", 30.0)
+TELEGRAM_READ_TIMEOUT = _get_float_env("TELEGRAM_READ_TIMEOUT", 180.0)
+TELEGRAM_WRITE_TIMEOUT = _get_float_env("TELEGRAM_WRITE_TIMEOUT", 180.0)
+TELEGRAM_POOL_TIMEOUT = _get_float_env("TELEGRAM_POOL_TIMEOUT", 30.0)

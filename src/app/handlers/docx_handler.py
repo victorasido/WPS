@@ -14,6 +14,12 @@ from src.app.ui.keyboards import (
 )
 from src.app.utils.decorators import handle_workflow_error
 from src.infra.database import LogRepository, session_manager
+from src.infra.config import (
+    TELEGRAM_CONNECT_TIMEOUT,
+    TELEGRAM_POOL_TIMEOUT,
+    TELEGRAM_READ_TIMEOUT,
+    TELEGRAM_WRITE_TIMEOUT,
+)
 
 log_repo = LogRepository()
 
@@ -22,7 +28,7 @@ WAIT_ZONE_SELECT = 2
 
 async def run_docx_detect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    session = session_manager.get_session(user_id)
+    session = session_manager.get_session(user_id, include_blobs=False)
     if not session:
         await update.message.reply_text(messages.get_session_expired())
         return ConversationHandler.END
@@ -68,7 +74,7 @@ async def _detect_docx_zones(
         template_mode=session.get("template_mode", False),
         modified_docx=session.get("modified_docx"),
     )
-    session = session_manager.get_session(user_id)
+    session = session_manager.get_session(user_id, include_blobs=False)
 
     if not zones:
         await status_msg.edit_text(
@@ -104,7 +110,7 @@ async def handle_zone_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await query.answer()
 
-    session = session_manager.get_session(user_id)
+    session = session_manager.get_session(user_id, include_blobs=False)
     if not session:
         await query.edit_message_text(messages.get_session_expired())
         return ConversationHandler.END
@@ -202,10 +208,10 @@ async def _process_docx(
                 is_template=is_template,
             ),
             parse_mode="Markdown",
-            read_timeout=60,
-            write_timeout=60,
-            connect_timeout=60,
-            pool_timeout=60,
+            read_timeout=TELEGRAM_READ_TIMEOUT,
+            write_timeout=TELEGRAM_WRITE_TIMEOUT,
+            connect_timeout=TELEGRAM_CONNECT_TIMEOUT,
+            pool_timeout=TELEGRAM_POOL_TIMEOUT,
         )
 
         try:
