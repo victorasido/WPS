@@ -83,10 +83,14 @@ def main():
             webhook_url=webhook_url,
             secret_token=webhook_secret or None,
             drop_pending_updates=True,
+            bootstrap_retries=-1,  # Retry koneksi awal tanpa batas
         )
     else:
         logger.info("Word Signer Bot started. Polling...")
-        app.run_polling(drop_pending_updates=True)
+        app.run_polling(
+            drop_pending_updates=True,
+            bootstrap_retries=-1,  # Retry koneksi awal tanpa batas (bukan 0)
+        )
 
 
 if __name__ == "__main__":

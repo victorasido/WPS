@@ -84,7 +84,9 @@ LIBREOFFICE_TIMEOUT = _get_int_env(
 
 # Timeout koneksi Telegram API. Upload/download file besar di server butuh headroom
 # lebih besar dibanding lokal.
-TELEGRAM_CONNECT_TIMEOUT = _get_float_env("TELEGRAM_CONNECT_TIMEOUT", 30.0)
+# CONNECT_TIMEOUT 60s: cold-start TLS di server (terutama Docker cold network stack)
+# bisa lebih lambat dari lokal — 30s terlalu ketat.
+TELEGRAM_CONNECT_TIMEOUT = _get_float_env("TELEGRAM_CONNECT_TIMEOUT", 60.0)
 TELEGRAM_READ_TIMEOUT = _get_float_env("TELEGRAM_READ_TIMEOUT", 180.0)
 TELEGRAM_WRITE_TIMEOUT = _get_float_env("TELEGRAM_WRITE_TIMEOUT", 180.0)
 TELEGRAM_POOL_TIMEOUT = _get_float_env("TELEGRAM_POOL_TIMEOUT", 30.0)
